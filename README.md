@@ -33,6 +33,15 @@ It runs entirely in your browser: no install, no server, and no video leaves you
   and an accuracy score for each player. The analysis is saved with the game.
 - **Analyse on Lichess**: one button imports the game into Lichess for its own analysis.
 - **Share**: download the PGN, copy it, save a picture of the board, or make an animated GIF of the whole game.
+- **Ending a game**: the flag button records a resignation or an agreed draw. When a clock runs out the game ends on
+  time, or as a draw if the other side can no longer checkmate (FIDE rule). The PGN gets the right result and termination.
+- **Live evaluation bar** (optional, Setup, Detection): Stockfish's assessment of the position while you play.
+- **Game library**: search saved games by player, event or opening, filter by result, see each player's wins, draws and
+  losses, and import games from any PGN file to review them with Stockfish.
+- **Printable scoresheet**: a FIDE-style A4 scoresheet for any game (Save or share, Print scoresheet).
+- **Video recording** (optional, needs a games folder): each camera's video is saved next to the photos, with its start
+  time in `labels.json` so moves can be matched to the video.
+- **Board colours** (walnut, tournament green, ocean, slate), move and capture sounds, and a shortcuts list (press `?`).
 - **Install as an app**: Chrome and Edge show an **Install app** button; the installed app has its own window and
   opens without internet.
 
@@ -108,6 +117,7 @@ webcam frame ──► sample each square ──► compare with last position �
 - `js/boardinfo.js`, `js/openings.js` — material count, spoken moves, opening names.
 - `js/engine.js`, `js/analysis.js` — Stockfish in a background worker, and the review scoring (Lichess's published formulas).
 - `js/share.js` — board images, GIFs and the Lichess import.
+- `js/library.js` — PGN import, search and player statistics.
 - `sw.js`, `manifest.webmanifest`, `icons/` — install as an app and work offline.
 - `vendor/` — bundled chess.js, piece set, Stockfish, openings list and GIF encoder, so nothing loads from other sites.
   See [THIRD_PARTY.md](THIRD_PARTY.md) for their licences. Update chess.js with `npm run vendor`.

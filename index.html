@@ -34,6 +34,8 @@
       <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 16l5-5 4 4 2-2 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
       <symbol id="i-film" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 9.5v5l4-2.5z" fill="currentColor"/></symbol>
+      <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 21V4m0 0h11l-2 4 2 4H6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V4h10v5M7 17H5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M7 14h10v6H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
@@ -45,6 +47,7 @@
     <div id="status" class="status idle" role="status" aria-live="polite">Set up your cameras to begin.</div>
     <div class="bar-actions">
       <button id="btnInstall" class="ghost install" hidden>Install app</button>
+      <span id="rec" class="rec" hidden title="Recording video">Rec</span>
       <span id="live" class="live" hidden>Live</span>
       <button id="btnSettings" class="icon" title="Setup (S)" aria-label="Open setup"><svg><use href="#i-gear"/></svg></button>
     </div>
@@ -87,7 +90,16 @@
         </button>
         <button id="btnUndo" class="icon" title="Undo last move (U)" aria-label="Undo"><svg><use href="#i-undo"/></svg></button>
         <button id="btnBaseline" class="icon" title="Accept the board as it looks now (B)" aria-label="Re-baseline"><svg><use href="#i-eye"/></svg></button>
-        <button id="btnFlip" class="icon" title="Flip board" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
+        <button id="btnFlip" class="icon" title="Flip board (F)" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
+        <div class="menu-wrap">
+          <button id="btnEnd" class="icon" title="End the game" aria-label="End the game" aria-haspopup="true" aria-expanded="false"><svg><use href="#i-flag"/></svg></button>
+          <div id="endMenu" class="menu" role="menu" hidden>
+            <button data-end="w-resign" role="menuitem">White resigns</button>
+            <button data-end="b-resign" role="menuitem">Black resigns</button>
+            <button data-end="draw" role="menuitem">Draw agreed</button>
+            <button id="btnClearResult" role="menuitem" hidden>Remove the result</button>
+          </div>
+        </div>
       </div>
       <div class="review-bar">
         <button id="rvFirst" class="icon" aria-label="Start position" title="Start (Home)"><svg><use href="#i-first"/></svg></button>
@@ -127,6 +139,7 @@
             <button id="btnCopy" role="menuitem"><svg><use href="#i-copy"/></svg>Copy PGN</button>
             <button id="btnPng" role="menuitem"><svg><use href="#i-image"/></svg>Board image</button>
             <button id="btnGif" role="menuitem"><svg><use href="#i-film"/></svg>Game animation (GIF)</button>
+            <button id="btnPrint" role="menuitem"><svg><use href="#i-print"/></svg>Print scoresheet</button>
           </div>
         </div>
       </div>
@@ -191,6 +204,13 @@
         <label class="check"><input id="sound" type="checkbox"> Beep when a move is recorded</label>
         <label class="check"><input id="speak" type="checkbox"> Read each move aloud</label>
         <label class="check"><input id="heatmap" type="checkbox"> Show what each camera sees changing</label>
+        <label class="check"><input id="liveEval" type="checkbox"> Show an engine evaluation bar while playing</label>
+        <label>Board colours
+          <select id="theme">
+            <option value="walnut">Walnut</option><option value="tournament">Tournament green</option>
+            <option value="ocean">Ocean</option><option value="slate">Slate</option>
+          </select>
+        </label>
         <button id="btnResetSettings" class="ghost">Reset to defaults</button>
       </section>
 
@@ -203,16 +223,46 @@
           </div>
           <p id="folderHint" class="note"></p>
           <label class="check"><input id="dataset" type="checkbox"> Save a photo from each camera at every move, labelled with the position (dataset)</label>
+          <label class="check"><input id="video" type="checkbox"> Record video from each camera while tracking (large files)</label>
         </div>
         <div class="accuracy-card">
           <p id="accuracy"></p>
           <button id="btnExportAccuracy" class="ghost">Export accuracy CSV</button>
         </div>
+        <div class="library-tools">
+          <input id="gameSearch" type="search" placeholder="Search players, events, openings" aria-label="Search games">
+          <select id="gameFilter" aria-label="Filter by result">
+            <option value="all">All results</option><option value="1-0">White won</option><option value="0-1">Black won</option>
+            <option value="1/2-1/2">Draws</option><option value="unfinished">Unfinished</option>
+          </select>
+          <label class="file-btn">Import PGN<input id="importPgn" type="file" accept=".pgn,text/plain" multiple hidden></label>
+        </div>
+        <details class="player-stats">
+          <summary>Players</summary>
+          <table id="playerTable"></table>
+        </details>
         <ul id="saved" class="saved"></ul>
       </section>
     </div>
-    <p class="drawer-foot">Keys: <kbd>Space</kbd> pause, <kbd>U</kbd> undo, <kbd>B</kbd> re-baseline, <kbd>M</kbd> type a move, <kbd>S</kbd> setup. Video never leaves your computer.</p>
+    <p class="drawer-foot">Press <kbd>?</kbd> for all keyboard shortcuts. Video never leaves your computer.</p>
   </aside>
+
+  <dialog id="keys" class="keys" aria-labelledby="keysTitle">
+    <h2 id="keysTitle">Keyboard shortcuts</h2>
+    <dl>
+      <dt><kbd>Space</kbd></dt><dd>Start or pause tracking</dd>
+      <dt><kbd>U</kbd></dt><dd>Undo the last move</dd>
+      <dt><kbd>B</kbd></dt><dd>Accept the board as it looks now</dd>
+      <dt><kbd>M</kbd></dt><dd>Type a move</dd>
+      <dt><kbd>F</kbd></dt><dd>Flip the board</dd>
+      <dt><kbd>S</kbd></dt><dd>Open or close setup</dd>
+      <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Step through a saved game</dd>
+      <dt><kbd>Home</kbd> <kbd>End</kbd></dt><dd>Start or end of a saved game</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close a panel, or leave a saved game</dd>
+      <dt><kbd>?</kbd></dt><dd>Show this list</dd>
+    </dl>
+    <form method="dialog"><button class="primary">Close</button></form>
+  </dialog>
 
   <template id="camTemplate">
     <article class="cam">

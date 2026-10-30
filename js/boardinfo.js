@@ -50,3 +50,17 @@ export function sanToWords(san) {
   }
   return (words + tail).trim();
 }
+
+/**
+ * Can this side still deliver checkmate in some legal sequence? Used when a clock runs out:
+ * under FIDE rules the game is drawn, not lost, if the opponent cannot possibly mate.
+ */
+export function canMate(board, color) {
+  let minors = 0;
+  for (const row of board) for (const sq of row) {
+    if (!sq || sq.color !== color || sq.type === 'k') continue;
+    if (sq.type === 'p' || sq.type === 'r' || sq.type === 'q') return true;
+    minors++;
+  }
+  return minors >= 2;
+}

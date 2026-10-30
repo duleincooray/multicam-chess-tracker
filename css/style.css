@@ -129,7 +129,7 @@ button.chip {
 /* board */
 .center { display: flex; flex-direction: column; align-items: center; gap: 14px; min-height: 0; }
 .board-frame {
-  padding: 10px; border-radius: 10px; background: var(--walnut);
+  padding: 10px; border-radius: 10px; background: var(--frame, var(--walnut));
   box-shadow: 0 1px 0 rgba(255, 255, 255, .12) inset, 0 14px 30px -18px rgba(40, 22, 10, .7);
 }
 .board {
@@ -346,3 +346,43 @@ kbd { font: 600 11px var(--ui); border: 1px solid var(--line); border-bottom-wid
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* board colours */
+body[data-theme="tournament"] { --sq-light: #eeeed2; --sq-dark: #769656; --frame: #4b6b39; }
+body[data-theme="ocean"] { --sq-light: #dee3e6; --sq-dark: #8ca2ad; --frame: #4a5f6b; }
+body[data-theme="slate"] { --sq-light: #d9d9d9; --sq-dark: #8a8a8a; --frame: #3d3d3d; }
+body[data-theme]:not([data-theme="walnut"]) .coord { color: #2a2a2a; }
+
+/* live evaluation bar */
+body.live-eval .evalbar { display: block; }
+
+/* recording indicator */
+.rec { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--warn); }
+.rec::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); animation: beat 1.2s ease-in-out infinite; }
+
+/* menus in the dock open upwards, centred */
+.dock .menu { right: auto; left: 50%; transform: translateX(-50%); min-width: 190px; }
+
+/* game library */
+.library-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.library-tools input[type="search"] { grid-column: 1 / -1; }
+.file-btn {
+  display: inline-flex !important; align-items: center; justify-content: center; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--surface);
+}
+.file-btn:hover { border-color: var(--muted); }
+.player-stats summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+.player-stats table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.player-stats th, .player-stats td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.player-stats th:first-child, .player-stats td:first-child { text-align: left; }
+.player-stats th { font-weight: 500; color: var(--muted); }
+
+/* keyboard shortcuts */
+.keys { border: 1px solid var(--line); border-radius: 16px; padding: 22px 26px; background: var(--surface); color: var(--ink); max-width: 420px; width: calc(100vw - 32px); }
+.keys::backdrop { background: rgba(10, 14, 12, .4); }
+.keys h2 { margin: 0 0 12px; font: 500 24px var(--book); color: var(--ink); text-transform: none; letter-spacing: 0; }
+.keys dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 16px; }
+.keys dt { text-align: right; }
+.keys dd { margin: 0; }
+.keys[open] { animation: pop .3s var(--ease); }
+.saved li.none { color: var(--muted); border-style: dashed; }

@@ -1,11 +1,11 @@
 // Service worker: lets the installed app open without internet.
 // Network first, so a new version on GitHub Pages is picked up as soon as you're online;
 // the cached copy is only used when the network isn't there.
-const CACHE = 'chesscam-v2';
+const CACHE = 'chesscam-v3';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/app.js', 'js/vision.js', 'js/tracker.js', 'js/storage.js', 'js/folder.js', 'js/research.js',
-  'js/boardinfo.js', 'js/openings.js', 'js/share.js', 'js/engine.js', 'js/analysis.js',
+  'js/boardinfo.js', 'js/openings.js', 'js/share.js', 'js/engine.js', 'js/analysis.js', 'js/library.js',
   'vendor/chess.js', 'vendor/gifenc.js', 'vendor/openings.json',
   ...['w', 'b'].flatMap((c) => ['K', 'Q', 'R', 'B', 'N', 'P'].map((t) => `vendor/pieces/${c}${t}.svg`)),
   'icons/icon-192.png', 'icons/favicon-32.png',

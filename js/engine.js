@@ -24,7 +24,14 @@ export class Engine {
    * Evaluate a position. Returns { cp | mate, best, pv } from White's point of view.
    * Stops at `depth` or after `movetime` ms, whichever comes first.
    */
-  async analyse(fen, { depth = 14, movetime = 800 } = {}) {
+  analyse(fen, opts) {
+    // one search at a time: queue requests from the live bar and the game review
+    const run = () => this.search(fen, opts);
+    this.queue = (this.queue || Promise.resolve()).then(run, run);
+    return this.queue;
+  }
+
+  async search(fen, { depth = 14, movetime = 800 } = {}) {
     await this.ready;
     let last = null;
     const onInfo = (line) => { if (line.startsWith('info') && / pv /.test(line)) last = parseInfo(line) || last; };

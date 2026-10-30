@@ -16,6 +16,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
 
 ### Added
+- End a game by resignation or agreed draw (flag button); time forfeit when a clock runs out, drawn if the opponent cannot mate. PGN gets Result and Termination.
+- Optional live evaluation bar while playing.
+- Game library: search by player, event or opening; filter by result; per-player wins, draws and losses; import PGN files.
+- Printable FIDE-style scoresheet.
+- Optional video recording of each camera into the game's folder, with start times in labels.json.
+- Board colour themes, move/capture/check sounds, keyboard shortcuts list (?), F to flip.
 - Adjust corners: drag calibration corners into place, with a magnifier, instead of re-clicking all four.
 - Opening names (Lichess chess-openings list, CC0).
 - Captured pieces and material balance.

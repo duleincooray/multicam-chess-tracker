@@ -9,13 +9,14 @@ import * as folder from './folder.js';
 import {
   parseTimeControl, timedGame, summarize, totals, accuracyCsv, labelsCsv, clockState, formatClock,
 } from './research.js';
-import { material, sanToWords } from './boardinfo.js';
+import { material, sanToWords, canMate } from './boardinfo.js';
 import { openingFor } from './openings.js';
 import { pngBlob, gifBlob, openInLichess } from './share.js';
 import { Engine } from './engine.js';
+import { importPgn, playerStats, filterGames } from './library.js';
 import { winPercent, formatEval, judgeMoves, reviewSummary } from './analysis.js';
 
-const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false, dataset: true, timeControl: '', zoom: true, speak: false };
+const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false, dataset: true, timeControl: '', zoom: true, speak: false, liveEval: false, video: false, theme: 'walnut' };
 const WORK_W_MAX = 960; // max width of the image the detector analyses (more detail on far squares)
 const TICK_MS = 100;    // detector runs ~10 times a second
 const PIECE_NAME = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
@@ -33,6 +34,10 @@ const state = {
   analysed: false,
   moving: false,
   pending: null,
+  result: null,    // a result entered by hand: { result, termination, reason, at }
+  liveEv: null,
+  liveToken: 0,
+  recorders: [],
   prevRefs: null,
   stats: {},
   anaToken: 0,
@@ -480,7 +485,7 @@ function playMove(mv, opts = {}) {
   hideChoice();
   saveCurrent();
   renderGame();
-  beep();
+  playSound(res.san.includes('+') || res.san.includes('#') ? 'check' : res.captured ? 'capture' : 'move');
   speak((opts.note ? 'Correction. ' : '') + sanToWords(res.san));
 
   const num = Math.ceil(state.game.history().length / 2);
@@ -489,6 +494,7 @@ function playMove(mv, opts = {}) {
     celebrate(res);
     return true;
   }
+  if (settings.liveEval) liveEvaluate();
   setStatus(msg, 'ok');
   return true;
 }
@@ -497,33 +503,65 @@ function playMove(mv, opts = {}) {
 
 const PLAYER = (color) => (color === 'w' ? $('white').value || 'White' : $('black').value || 'Black');
 
+/** Is the game finished, by the rules (mate, stalemate, draw) or by a result entered by hand? */
+const gameOver = () => state.game.isGameOver() || !!state.result;
+const SCORE = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½' };
+
 function celebrate(lastMove) {
   const g = state.game;
   const mate = g.isCheckmate();
   const winner = lastMove.color; // the side that just moved delivered mate
-  let kind = 'Draw', who = '', score = '½–½';
-  if (mate) {
-    kind = 'Checkmate';
-    who = `${PLAYER(winner)} wins with ${lastMove.san}`;
-    score = winner === 'w' ? '1–0' : '0–1';
-  } else if (g.isStalemate()) { kind = 'Stalemate'; who = 'No legal moves, but no check.'; }
+  let kind = 'Draw', who = '';
+  if (mate) { kind = 'Checkmate'; who = `${PLAYER(winner)} wins with ${lastMove.san}`; }
+  else if (g.isStalemate()) { kind = 'Stalemate'; who = 'No legal moves, but no check.'; }
   else if (g.isThreefoldRepetition()) who = 'Threefold repetition.';
   else if (g.isInsufficientMaterial()) who = 'Not enough material to mate.';
   else who = 'Fifty-move rule.';
+  showResultCard({ kind, who, result: mate ? (winner === 'w' ? '1-0' : '0-1') : '1/2-1/2' });
+}
 
+/**
+ * End the game by hand: resignation, agreed draw or a clock running out.
+ * termination: 'resign' | 'agreement' | 'time'.
+ */
+function endGame(result, termination, reason) {
+  if (gameOver()) return;
+  state.result = { result, termination, reason, at: Date.now() };
+  state.events.push({ type: 'result', result, termination, at: state.result.at });
+  saveCurrent();
+  renderGame();
+  const winner = result === '1-0' ? 'w' : result === '0-1' ? 'b' : null;
+  showResultCard({ kind: reason, who: winner ? `${PLAYER(winner)} wins` : 'Game drawn', result });
+  speak(reason);
+}
+
+function clearResult() {
+  if (!state.result) return;
+  state.events.push({ type: 'result-cleared', at: Date.now() });
+  state.result = null;
+  state.flagged = null;
+  hideResult();
+  saveCurrent();
+  renderGame();
+  setStatus(`Result removed. ${turnName()} to move.`, 'ok');
+}
+
+function showResultCard({ kind, who, result }) {
+  const winner = result === '1-0' ? 'w' : result === '0-1' ? 'b' : null;
   setTracking(false);
-  const ended = mate ? `Checkmate. ${PLAYER(winner)} wins ${score}.` : `${kind}. Game drawn.`;
+  stopVideo();
+  const ended = `${kind}. ${winner ? `${PLAYER(winner)} wins ${SCORE[result]}.` : 'Game drawn.'}`;
   setStatus(`${ended} Game saved.`, 'ok');
   saveFinishedGame().then((note) => setStatus(`${ended} Game saved.${note}`, 'ok'));
   writeDataset().then(writeAccuracyFile);
   $('resultKind').textContent = kind;
   $('resultWho').textContent = who;
-  $('resultScore').textContent = score;
+  $('resultScore').textContent = SCORE[result];
   const box = $('result');
-  box.classList.toggle('mate', mate);
+  box.classList.toggle('mate', !!winner);
   box.hidden = false;
   $('btnResultSave').focus({ preventScroll: true });
-  if (mate) {
+  if (winner) {
     fanfare();
     if (!reduceMotion()) confetti(winner);
   }
@@ -601,6 +639,8 @@ function undoMove() {
   if (!undone) return;
   const popped = state.meta.pop();
   state.events.push({ type: 'undo', san: undone.san, source: popped?.source, ply, at: Date.now() });
+  state.result = null;
+  state.flagged = null;
   removePly(ply);
   state.prevRefs = null;
   hideResult();
@@ -610,6 +650,7 @@ function undoMove() {
   saveCurrent();
   renderGame();
   setStatus(`Undid ${undone.san}. Make sure the board matches, then carry on.`, 'busy');
+  if (settings.liveEval) liveEvaluate();
 }
 
 function rebaseline() {
@@ -627,12 +668,14 @@ function headers() {
     Date: (store.get('current', {}).started || new Date().toISOString()).slice(0, 10).replaceAll('-', '.'),
     White: $('white').value || 'White',
     Black: $('black').value || 'Black',
+    ...(state.result ? { Result: state.result.result, Termination: state.result.termination === 'time' ? 'Time forfeit' : 'Normal' } : {}),
   };
 }
 
 /** The game as PGN, with the time each move took (and clock times when a time control is set). */
 function currentPgn() {
   const g = timedGame(state.game, state.meta.map((m) => m.emt), parseTimeControl(settings.timeControl));
+  if (state.result?.reason) g.setComment(`${g.getComment() ? g.getComment() + ' ' : ''}${state.result.reason}`);
   return buildPgn(g, headers());
 }
 
@@ -649,10 +692,10 @@ function saveCurrent() {
   const id = cur.id || Date.now();
   const white = $('white').value, black = $('black').value, event = $('event').value;
   const file = pgnName(white || 'White', black || 'Black', started, event || 'Casual game');
-  const downloaded = state.game.isGameOver() ? cur.downloaded : false; // re-download if a finished game changes
+  const downloaded = gameOver() ? cur.downloaded : false; // re-download if a finished game changes
   store.set('current', {
     ...cur, id, started, ended, playing: n > 0, pgn: state.game.pgn(), white, black, event, file, downloaded,
-    meta: state.meta, events: state.events,
+    meta: state.meta, events: state.events, result: state.result,
   });
   upsertCurrentGame();
   if (n || cur.playing) {
@@ -672,9 +715,10 @@ function upsertCurrentGame(final = false) {
     games.unshift({
       id: cur.id, date: cur.started, ended: cur.ended, white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: n, pgn, file: cur.file,
-      inProgress: !final && !state.game.isGameOver(),
+      inProgress: !final && !gameOver(),
       meta: state.meta, events: state.events, summary: summarize(state.meta, state.events),
       dataDir: cur.dataset?.dir, cameras: state.cams.length || cur.cameras,
+      opening: (() => { const o = OPENINGS && openingFor(state.game.history({ verbose: true }).map((m) => m.after), OPENINGS); return o ? `${o.eco} ${o.name}` : ''; })(),
     });
   }
   if (!store.set('games', games)) setStatus('This browser is out of storage space. Choose a games folder to keep saving.', 'warn');
@@ -717,6 +761,7 @@ function restoreCurrent() {
   state.meta = (cur.meta || []).slice(0, n);
   while (state.meta.length < n) state.meta.push({ source: 'unknown' });
   state.events = cur.events || [];
+  state.result = cur.result || null;
 }
 
 async function saveAndNewGame() {
@@ -727,6 +772,7 @@ async function saveAndNewGame() {
       ? ` It's in ${folder.folderName()}/${store.get('current', {}).file}.`
       : await saveFinishedGame());
   }
+  stopVideo();
   if (state.game.history().length) await writeDataset(); // final labels and log for the finished game
   writeAccuracyFile();
   state.game = new Chess();
@@ -734,6 +780,8 @@ async function saveAndNewGame() {
   state.meta = [];
   state.events = [];
   state.flagged = null;
+  state.result = null;
+  state.liveEv = null;
   state.clockStart = state.tracking ? Date.now() : null;
   const started = new Date().toISOString();
   $('event').value = ''; // a new game gets its own name; players carry over
@@ -805,19 +853,30 @@ function renderFolder() {
       : `Auto-saving to ${name}${state.autosavedFile ? `/${state.autosavedFile}` : ''}`;
 }
 
-function openMenu() { $('exportMenu').hidden = false; $('btnExport').setAttribute('aria-expanded', 'true'); }
-function closeMenu() { $('exportMenu').hidden = true; $('btnExport').setAttribute('aria-expanded', 'false'); }
+const MENUS = [['exportMenu', 'btnExport'], ['endMenu', 'btnEnd']];
+function openMenu(menu = 'exportMenu') {
+  closeMenu();
+  const btn = MENUS.find(([m]) => m === menu)[1];
+  $(menu).hidden = false;
+  $(btn).setAttribute('aria-expanded', 'true');
+}
+function closeMenu() {
+  for (const [m, b] of MENUS) { $(m).hidden = true; $(b).setAttribute('aria-expanded', 'false'); }
+}
 
 /** The game on screen: the live game, or the saved game being reviewed. */
 function viewedGameInfo() {
   if (state.review) {
     const g = state.review.meta;
-    return { pgn: g.pgn, file: g.file || pgnName(g.white, g.black, g.date, g.event), moves: state.review.moves, white: g.white, black: g.black, start: state.review.start };
+    let hdr = {};
+    try { const c = new Chess(); c.loadPgn(g.pgn); hdr = c.getHeaders(); } catch { /* no headers */ }
+    return { pgn: g.pgn, file: g.file || pgnName(g.white, g.black, g.date, g.event), moves: state.review.moves, white: g.white, black: g.black, start: state.review.start, headers: hdr };
   }
   const h = headers();
   return {
     pgn: currentPgn(), file: pgnName(h.White, h.Black, store.get('current', {}).started || new Date().toISOString(), h.Event),
     moves: state.game.history({ verbose: true }), white: h.White, black: h.Black,
+    headers: { ...h, Result: gameOver() ? (state.result?.result ?? currentPgn().match(/\[Result "([^"]+)"\]/)?.[1]) : '*' },
   };
 }
 
@@ -942,6 +1001,174 @@ function renderMoves() {
   else list.scrollTop = list.scrollHeight;
 }
 
+// ───────────────────────────────────────── live evaluation
+
+async function liveEvaluate() {
+  if (!settings.liveEval || state.review) return;
+  const token = ++state.liveToken;
+  const fen = state.game.fen();
+  const over = endFen(fen);
+  if (over) { state.liveEv = over; renderEval(); return; }
+  try { state.engine ??= new Engine(); } catch { return; }
+  const ev = await state.engine.analyse(fen, { depth: 16, movetime: 1500 });
+  if (token !== state.liveToken || state.review) return;
+  state.liveEv = ev;
+  renderEval();
+}
+
+function applyLiveEval() {
+  document.body.classList.toggle('live-eval', !!settings.liveEval);
+  if (settings.liveEval) liveEvaluate(); else { state.liveToken++; state.liveEv = null; }
+  renderEval();
+}
+
+// ───────────────────────────────────────── video recording
+
+/** Record each camera's video straight into the game's folder while tracking (Chrome/Edge, games folder needed). */
+async function startVideo() {
+  if (!settings.video || !folder.folderName() || state.recorders.length || !window.MediaRecorder || !state.cams.length) return;
+  if (!(await folder.ensurePermission(false))) return;
+  const cur = store.get('current', {});
+  const ds = cur.dataset || { dir: stampOf(new Date()), entries: [] };
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+  const startedAt = new Date();
+  for (const c of state.cams) {
+    const file = `cam-${c.key}_${stampOf(startedAt).slice(11)}.webm`;
+    let w;
+    try { w = await folder.openWritable(`${ds.dir}/${file}`); } catch { w = null; }
+    if (!w) continue;
+    const rec = new MediaRecorder(c.stream, { mimeType: mime, videoBitsPerSecond: 2_500_000 });
+    let chain = Promise.resolve();
+    rec.ondataavailable = (e) => { if (e.data.size) chain = chain.then(() => w.write(e.data)); };
+    rec.onstop = () => { chain = chain.then(() => w.close()).catch(() => {}); };
+    rec.start(4000); // write to disk every 4 seconds, so little is lost if the browser closes
+    state.recorders.push({ rec, camera: c.key, file, startedAt: startedAt.toISOString() });
+  }
+  if (!state.recorders.length) return;
+  ds.videos = [...(ds.videos || []), ...state.recorders.map(({ camera, file, startedAt: t }) => ({ camera, file, startedAt: t }))];
+  store.set('current', { ...store.get('current', {}), dataset: ds });
+  $('rec').hidden = false;
+}
+
+function stopVideo() {
+  for (const r of state.recorders) if (r.rec.state !== 'inactive') r.rec.stop();
+  state.recorders = [];
+  $('rec').hidden = true;
+}
+
+// ───────────────────────────────────────── sounds and colours
+
+/** A short wooden "tock" for a move, a double one for a capture, a brighter one for check. */
+function playSound(kind) {
+  if (!settings.sound) return;
+  try {
+    state.audio ??= new AudioContext();
+    const a = state.audio, t0 = a.currentTime;
+    const hit = (t, freq, gain) => {
+      const len = Math.floor(a.sampleRate * 0.08);
+      const buf = a.createBuffer(1, len, a.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 4);
+      const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+      src.buffer = buf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 4; g.gain.value = gain;
+      src.connect(f).connect(g).connect(a.destination);
+      src.start(t);
+    };
+    if (kind === 'capture') { hit(t0, 900, 2.2); hit(t0 + 0.07, 700, 1.8); }
+    else if (kind === 'check') { hit(t0, 1600, 2); hit(t0 + 0.09, 2000, 1.2); }
+    else hit(t0, 1100, 2.4);
+  } catch { /* sound is optional */ }
+}
+
+function applyTheme() { document.body.dataset.theme = settings.theme || 'walnut'; }
+
+// ───────────────────────────────────────── scoresheet
+
+/** A printable FIDE-style scoresheet in a new window. */
+function printScoresheet(v) {
+  const sans = v.moves.map((m) => m.san);
+  const rows = Math.max(30, Math.ceil(Math.ceil(sans.length / 2) / 2));
+  const cell = (i) => sans[i] ?? '';
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const half = (start) => Array.from({ length: rows }, (_, r) => {
+    const n = start + r;
+    return `<tr><td class="n">${n}</td><td>${esc(cell(2 * (n - 1)))}</td><td>${esc(cell(2 * (n - 1) + 1))}</td></tr>`;
+  }).join('');
+  const h = v.headers || {};
+  const o = OPENINGS && openingFor(v.moves.map((m) => m.after), OPENINGS);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Scoresheet</title><style>
+    @page { size: A4; margin: 14mm; }
+    body { font: 12px/1.35 Georgia, serif; color: #000; margin: 0; }
+    h1 { font-size: 20px; margin: 0 0 10px; }
+    .head { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin-bottom: 12px; }
+    .head div { border-bottom: 1px solid #000; padding: 3px 0; } .head b { font-weight: normal; color: #444; margin-right: 6px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    table { width: 100%; border-collapse: collapse; } td, th { border: 1px solid #000; padding: 2px 6px; height: 17px; }
+    th { font-weight: normal; background: #eee; } td.n { width: 28px; text-align: center; color: #444; }
+    .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 28px; } .sign div { border-top: 1px solid #000; padding-top: 4px; }
+    .foot { margin-top: 10px; color: #555; font-size: 10px; }
+  </style></head><body>
+    <h1>${esc(h.Event || 'Chess game')}</h1>
+    <div class="head">
+      <div><b>White</b>${esc(v.white)}</div><div><b>Black</b>${esc(v.black)}</div>
+      <div><b>Date</b>${esc(h.Date || '')}</div><div><b>Result</b>${esc(h.Result && h.Result !== '*' ? h.Result : '')}</div>
+      <div><b>Round</b></div><div><b>Board</b></div>
+      <div style="grid-column: 1 / -1"><b>Opening</b>${o ? esc(`${o.eco} ${o.name}`) : ''}</div>
+    </div>
+    <div class="grid">
+      <table><tr><th></th><th>White</th><th>Black</th></tr>${half(1)}</table>
+      <table><tr><th></th><th>White</th><th>Black</th></tr>${half(rows + 1)}</table>
+    </div>
+    <div class="sign"><div>White's signature</div><div>Black's signature</div></div>
+    <p class="foot">Recorded with Chess Cam Tracker.</p>
+    <script>window.onload = () => { window.print(); };<\/script>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { setStatus('Allow pop-ups for this page to print the scoresheet.', 'warn'); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+// ───────────────────────────────────────── game library
+
+async function importFiles(e) {
+  const files = [...e.target.files];
+  e.target.value = '';
+  let added = 0, bad = 0;
+  const games = store.get('games', []);
+  for (const f of files) {
+    const { games: got, failed } = importPgn(await f.text(), Date.now() + games.length * 1000);
+    for (const g of got) g.opening = openingOf(g.pgn);
+    games.push(...got);
+    added += got.length;
+    bad += failed.length;
+  }
+  games.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if (!store.set('games', games)) { setStatus('Not enough browser storage to import all of those.', 'warn'); return; }
+  renderSaved();
+  setStatus(`Imported ${added} game${added === 1 ? '' : 's'}${bad ? `; ${bad} could not be read` : ''}.`, bad ? 'busy' : 'ok');
+}
+
+function openingOf(pgn) {
+  if (!OPENINGS) return '';
+  try {
+    const g = new Chess();
+    g.loadPgn(pgn);
+    const o = openingFor(g.history({ verbose: true }).map((m) => m.after), OPENINGS);
+    return o ? `${o.eco} ${o.name}` : '';
+  } catch { return ''; }
+}
+
+function renderPlayerStats(games) {
+  const rows = playerStats(games).slice(0, 12);
+  $('playerTable').innerHTML = rows.length
+    ? '<tr><th>Player</th><th>Games</th><th>Won</th><th>Drawn</th><th>Lost</th><th>Score</th></tr>' +
+      rows.map((p) => `<tr><td></td><td>${p.games}</td><td>${p.wins}</td><td>${p.draws}</td><td>${p.losses}</td><td>${Math.round(p.score * 100)}%</td></tr>`).join('')
+    : '<tr><td>Finished games will show results per player here.</td></tr>';
+  // names are set as text, never as HTML
+  [...$('playerTable').querySelectorAll('tr')].slice(1).forEach((tr, i) => { if (rows[i]) tr.firstChild.textContent = rows[i].name; });
+}
+
 // ───────────────────────────────────────── research data
 
 let datasetChain = Promise.resolve();
@@ -1016,6 +1243,7 @@ async function writeDatasetFiles() {
     note: 'Each image shows the board after `ply` half-moves; `fen` is the exact position. Corners are the calibrated outer corners of the playing area (a1, h1, h8, a8) in normalised image coordinates.',
     game: { event: h.Event, white: h.White, black: h.Black, started: cur.started },
     cameras,
+    videos: ds.videos || [],
     positions: ds.entries,
   };
   await folder.writeFile(`${ds.dir}/labels.json`, JSON.stringify(labels, null, 2));
@@ -1155,7 +1383,7 @@ function finishAnalysis(rv) {
 function renderEval() {
   const rv = state.review;
   const bar = $('evalbar'), arrow = $('bestArrow');
-  const ev = rv?.evals?.[rv.ply];
+  const ev = rv ? rv.evals?.[rv.ply] : settings.liveEval ? state.liveEv : null;
   arrow.style.display = 'none';
   bar.classList.toggle('flipped', state.flipped);
   if (!ev) { bar.querySelector('.evalfill').style.height = '50%'; bar.querySelector('.evaltext').textContent = ''; return; }
@@ -1163,7 +1391,7 @@ function renderEval() {
   bar.querySelector('.evalfill').style.height = `${pct}%`;
   bar.querySelector('.evaltext').textContent = ev.text || formatEval(ev);
   bar.classList.toggle('black-ahead', pct < 50);
-  if (ev.best) {
+  if (ev.best && rv) {
     const xy = (sq) => {
       const f = sq.charCodeAt(0) - 97, r = +sq[1] - 1;
       return state.flipped ? [7 - f + 0.5, r + 0.5] : [f + 0.5, 7 - r + 0.5];
@@ -1186,6 +1414,7 @@ function exitReview() {
   $('white').value = cur.white || ''; $('black').value = cur.black || '';
   $('white').readOnly = $('black').readOnly = false;
   renderGame();
+  applyLiveEval();
   setStatus('Back to the live game.', 'ok');
 }
 
@@ -1223,8 +1452,8 @@ function renderClocks() {
   const show = !!tc && !state.review;
   $('clockW').hidden = $('clockB').hidden = !show;
   if (!show) return;
-  const over = state.game.isGameOver();
-  const now = over ? (state.meta.at(-1)?.at ?? Date.now()) : Date.now();
+  const over = gameOver();
+  const now = over ? (state.result?.at ?? state.meta.at(-1)?.at ?? Date.now()) : Date.now();
   const c = clockState(state.meta, tc, state.game.turn(), now, state.clockStart);
   for (const [side, el] of [['w', $('clockW')], ['b', $('clockB')]]) {
     const ms = c[side];
@@ -1235,7 +1464,10 @@ function renderClocks() {
   const flagged = ['w', 'b'].find((side) => c[side] === 0);
   if (flagged && !over && state.flagged !== flagged) {
     state.flagged = flagged;
-    setStatus(`${PLAYER(flagged)} has run out of time.`, 'warn');
+    const other = flagged === 'w' ? 'b' : 'w';
+    // FIDE: running out of time loses, unless the opponent could not mate by any legal moves
+    if (canMate(state.game.board(), other)) endGame(other === 'w' ? '1-0' : '0-1', 'time', `${PLAYER(flagged)} lost on time`);
+    else endGame('1/2-1/2', 'time', `${PLAYER(flagged)} ran out of time, but ${PLAYER(other)} cannot checkmate`);
   }
 }
 setInterval(() => { if (!document.hidden) renderClocks(); }, 250);
@@ -1281,7 +1513,11 @@ function renderSaved() {
   renderAccuracy();
   const ul = $('saved');
   ul.innerHTML = '';
-  for (const g of store.get('games', [])) {
+  const all = store.get('games', []);
+  renderPlayerStats(all);
+  const shown = filterGames(all, $('gameSearch').value, $('gameFilter').value);
+  if (all.length && !shown.length) ul.innerHTML = '<li class="none">No saved games match.</li>';
+  for (const g of shown) {
     const li = document.createElement('li');
     li.innerHTML = `<div class="info"><div class="title"></div><div class="meta"></div></div>
       <div class="acts"><button data-act="open" class="primary">Open</button><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
@@ -1376,6 +1612,7 @@ function setTracking(on) {
   state.tracking = on && state.cams.length > 0 && state.cams.every((c) => c.sampler);
   // The first move's time is measured from when tracking starts.
   if (state.tracking && !state.game.history().length) state.clockStart = Date.now();
+  if (state.tracking) startVideo();
   state.stillSince = null;
   state.analysed = false;
   if (state.tracking) setStatus('Keep hands off the board for a moment while it reads the position…', 'busy');
@@ -1487,20 +1724,6 @@ function label(ctx, text, x, y, color = '#ffffff') {
   ctx.fillText(text, x, y);
 }
 
-function beep() {
-  if (!settings.sound) return;
-  try {
-    state.audio ??= new AudioContext();
-    const o = state.audio.createOscillator(), g = state.audio.createGain();
-    o.frequency.value = 880;
-    g.gain.setValueAtTime(0.15, state.audio.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, state.audio.currentTime + 0.15);
-    o.connect(g).connect(state.audio.destination);
-    o.start();
-    o.stop(state.audio.currentTime + 0.15);
-  } catch { /* sound is optional */ }
-}
-
 // ───────────────────────────────────────── settings UI
 
 function bindSettings() {
@@ -1517,6 +1740,9 @@ function bindSettings() {
     $('dataset').checked = settings.dataset;
     $('zoom').checked = settings.zoom;
     $('speak').checked = settings.speak;
+    $('liveEval').checked = settings.liveEval;
+    $('video').checked = settings.video;
+    $('theme').value = settings.theme;
     $('timeControl').value = settings.timeControl;
   };
   for (const [id, out, fmt] of fields) {
@@ -1526,7 +1752,7 @@ function bindSettings() {
       store.set('settings', settings);
     });
   }
-  for (const id of ['sound', 'heatmap', 'dataset', 'zoom', 'speak']) {
+  for (const id of ['sound', 'heatmap', 'dataset', 'zoom', 'speak', 'liveEval', 'video']) {
     $(id).addEventListener('change', () => { settings[id] = $(id).checked; store.set('settings', settings); });
   }
   $('timeControl').addEventListener('change', () => {
@@ -1537,6 +1763,9 @@ function bindSettings() {
     saveCurrent(); // rewrite the game file with clock times
   });
   $('zoom').addEventListener('change', () => state.cams.forEach(updateView));
+  $('liveEval').addEventListener('change', applyLiveEval);
+  $('video').addEventListener('change', () => { if (settings.video && state.tracking) startVideo(); else if (!settings.video) stopVideo(); });
+  $('theme').addEventListener('change', () => { settings.theme = $('theme').value; store.set('settings', settings); applyTheme(); });
   $('btnExportAccuracy').onclick = () => download(accuracyCsv(store.get('games', [])), 'accuracy.csv');
     $('btnResetSettings').onclick = () => { Object.assign(settings, DEFAULTS); store.set('settings', settings); sync(); };
   sync();
@@ -1566,7 +1795,27 @@ function init() {
     try { await navigator.clipboard.writeText(viewedGameInfo().pgn); setStatus('PGN copied.', 'ok'); }
     catch { setStatus('Could not copy; use Download PGN instead.', 'warn'); }
   };
-  $('btnExport').onclick = (e) => { e.stopPropagation(); $('exportMenu').hidden ? openMenu() : closeMenu(); };
+  $('btnExport').onclick = (e) => { e.stopPropagation(); $('exportMenu').hidden ? openMenu('exportMenu') : closeMenu(); };
+  $('btnEnd').onclick = (e) => {
+    e.stopPropagation();
+    $('btnClearResult').hidden = !state.result;
+    for (const b of document.querySelectorAll('[data-end]')) b.disabled = gameOver() || !state.game.history().length;
+    $('endMenu').hidden ? openMenu('endMenu') : closeMenu();
+  };
+  for (const b of document.querySelectorAll('[data-end]')) {
+    b.onclick = () => {
+      closeMenu();
+      const k = b.dataset.end;
+      if (k === 'w-resign') endGame('0-1', 'resign', `${PLAYER('w')} resigns`);
+      else if (k === 'b-resign') endGame('1-0', 'resign', `${PLAYER('b')} resigns`);
+      else endGame('1/2-1/2', 'agreement', 'Draw agreed');
+    };
+  }
+  $('btnClearResult').onclick = () => { closeMenu(); clearResult(); };
+  $('btnPrint').onclick = () => { closeMenu(); printScoresheet(viewedGameInfo()); };
+  $('gameSearch').addEventListener('input', renderSaved);
+  $('gameFilter').addEventListener('change', renderSaved);
+  $('importPgn').addEventListener('change', importFiles);
   document.addEventListener('click', (e) => { if (!e.target.closest('.menu-wrap')) closeMenu(); });
   $('btnPng').onclick = exportPng;
   $('btnGif').onclick = exportGif;
@@ -1593,6 +1842,7 @@ function init() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('drawer').classList.contains('open')) { closeDrawer(); return; }
     if (e.target.closest('input:not([readonly]), select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (state.review) {
@@ -1600,10 +1850,12 @@ function init() {
       if (k in keys) { e.preventDefault(); reviewGoto(keys[k]); return; }
       if (k === 'escape' && !$('drawer').classList.contains('open')) { exitReview(); return; }
     }
-    if (k === ' ') { e.preventDefault(); if (!$('btnTrack').disabled && !state.game.isGameOver()) setTracking(!state.tracking); }
+    if (k === ' ') { e.preventDefault(); if (!$('btnTrack').disabled && !gameOver()) setTracking(!state.tracking); }
     else if (k === 'u') undoMove();
     else if (k === 'b') rebaseline();
     else if (k === 'm') { e.preventDefault(); $('manualMove').focus(); }
+    else if (k === 'f') $('btnFlip').click();
+    else if (e.key === '?') { const d = $('keys'); d.open ? d.close() : d.showModal(); }
     else if (k === 's') { $('drawer').classList.contains('open') ? closeDrawer() : openDrawer(); }
     else if (k === 'escape') closeDrawer();
   });
@@ -1628,6 +1880,9 @@ function init() {
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; $('btnInstall').hidden = false; });
   window.addEventListener('appinstalled', () => { $('btnInstall').hidden = true; setStatus('Installed. Open Chess Cam Tracker from your desktop or Start menu.', 'ok'); });
   $('btnInstall').onclick = async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice; installEvent = null; $('btnInstall').hidden = true; };
+  applyTheme();
+  applyLiveEval();
+  window.addEventListener('pagehide', stopVideo);
   listCameras(false).catch(() => {});
   if (!state.cams.length) setTimeout(() => openDrawer('cameras'), 300);
   navigator.mediaDevices?.addEventListener?.('devicechange', () => listCameras(false).catch(() => {}));
