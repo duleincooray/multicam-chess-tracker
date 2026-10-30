@@ -361,7 +361,7 @@ function saveAndNewGame() {
     const h = headers();
     const pgn = currentPgn();
     games.unshift({
-      id: Date.now(), date: new Date().toISOString(), white: h.White, black: h.Black,
+      id: Date.now(), date: new Date().toISOString(), white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: state.game.history().length, pgn,
     });
     if (!store.set('games', games)) setStatus('Could not save in this browser; download the PGN instead.', 'warn');
@@ -384,9 +384,10 @@ function download(text, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-function pgnName(white, black, iso) {
+function pgnName(white, black, iso, event) {
   const safe = (s) => String(s).replace(/[^\w-]+/g, '_').slice(0, 30);
-  return `${iso.slice(0, 10)}_${safe(white)}_vs_${safe(black)}.pgn`;
+  const name = event && event !== 'Casual game' ? `${safe(event)}_` : '';
+  return `${iso.slice(0, 10)}_${name}${safe(white)}_vs_${safe(black)}.pgn`;
 }
 
 // ───────────────────────────────────────── rendering
@@ -432,16 +433,39 @@ function renderMoves() {
 
 function renderGame() { renderBoard(); renderMoves(); updateButtons(); }
 
+function updateSavedGame(id, fields) {
+  const games = store.get('games', []);
+  const g = games.find((x) => x.id === id);
+  if (!g) return;
+  Object.assign(g, fields);
+  try {
+    const c = new Chess();
+    c.loadPgn(g.pgn);
+    c.setHeader('Event', g.event || 'Casual game');
+    c.setHeader('White', g.white || 'White');
+    c.setHeader('Black', g.black || 'Black');
+    g.pgn = c.pgn();
+  } catch { /* keep the old PGN text if it can't be parsed */ }
+  store.set('games', games);
+}
+
+function savedTitle(g) {
+  return g.event && g.event !== 'Casual game' ? g.event : `${g.white} vs ${g.black}`;
+}
+
 function renderSaved() {
   const ul = $('saved');
   ul.innerHTML = '';
   for (const g of store.get('games', [])) {
     const li = document.createElement('li');
-    li.innerHTML = `<div><div></div><div class="meta"></div></div>
-      <div class="acts"><button data-act="dl">PGN</button><button data-act="del" class="ghost">Delete</button></div>`;
-    li.querySelector('div > div').textContent = `${g.white} vs ${g.black} · ${g.result}`;
-    li.querySelector('.meta').textContent = `${new Date(g.date).toLocaleString()} · ${Math.ceil(g.moves / 2)} moves`;
-    li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, pgnName(g.white, g.black, g.date));
+    li.innerHTML = `<div class="info"><div class="title"></div><div class="meta"></div></div>
+      <div class="acts"><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
+      <button data-act="del" class="ghost">Delete</button></div>`;
+    li.querySelector('.title').textContent = `${savedTitle(g)} · ${g.result}`;
+    li.querySelector('.meta').textContent =
+      `${g.white} vs ${g.black} · ${new Date(g.date).toLocaleString()} · ${Math.ceil(g.moves / 2)} moves`;
+    li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, pgnName(g.white, g.black, g.date, g.event));
+    li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
     li.querySelector('[data-act="del"]').onclick = () => {
       if (!confirm('Delete this saved game?')) return;
       store.set('games', store.get('games', []).filter((x) => x.id !== g.id));
@@ -449,6 +473,31 @@ function renderSaved() {
     };
     ul.appendChild(li);
   }
+}
+
+function editSaved(li, g) {
+  li.innerHTML = `<form class="rename">
+      <label>Game name <input name="event" placeholder="e.g. Club night round 3"></label>
+      <label>White <input name="white"></label>
+      <label>Black <input name="black"></label>
+      <div class="acts"><button type="submit" class="primary">Save</button><button type="button" class="ghost">Cancel</button></div>
+    </form>`;
+  const f = li.querySelector('form');
+  f.event.value = g.event && g.event !== 'Casual game' ? g.event : '';
+  f.white.value = g.white;
+  f.black.value = g.black;
+  f.event.focus();
+  f.querySelector('button[type="button"]').onclick = renderSaved;
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    updateSavedGame(g.id, {
+      event: f.event.value.trim() || 'Casual game',
+      white: f.white.value.trim() || 'White',
+      black: f.black.value.trim() || 'Black',
+    });
+    renderSaved();
+    setStatus('Game renamed.', 'ok');
+  };
 }
 
 function showChoice(cands) {
@@ -614,7 +663,7 @@ function init() {
   $('btnFlip').onclick = () => { state.flipped = !state.flipped; store.set('flipped', state.flipped); renderBoard(); };
   $('btnDownload').onclick = () => {
     const h = headers();
-    download(currentPgn(), pgnName(h.White, h.Black, store.get('current', {}).started || new Date().toISOString()));
+    download(currentPgn(), pgnName(h.White, h.Black, store.get('current', {}).started || new Date().toISOString(), h.Event));
   };
   $('btnCopy').onclick = async () => {
     try { await navigator.clipboard.writeText(currentPgn()); setStatus('PGN copied.', 'ok'); }

@@ -6,6 +6,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Rename saved games (game name, White, Black); the PGN headers and download file name follow.
 - 1920 × 1080 and 2560 × 1440 camera resolutions; the detector now analyses up to 960 px wide for more detail on far squares.
 - The camera card shows the resolution the camera actually delivers.
 - Compensation for webcam auto-exposure and white-balance drift, so a brightness change no longer looks like moved pieces.
