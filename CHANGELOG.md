@@ -11,6 +11,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
 
 ### Added
+- Every game is saved automatically: the game in progress always appears in Saved games (marked in progress) and is updated after each move. When a game ends it is downloaded as PGN if no games folder is set. The Save & new button is now New game.
+- Checkmate celebration: the mated king topples, the winning king rises, confetti bursts from the board and a short fanfare plays (when sound is on). A result card offers Save & new game. Draws and stalemate get a quieter card. Tracking stops when the game ends.
 - Games folder: pick a folder once and the game is auto-saved there as a .pgn file after every move (Chrome/Edge). Renaming updates the file. Without a folder, Save & new game downloads the PGN.
 - Rename saved games (game name, White, Black); the PGN headers and download file name follow.
 - 1920 × 1080 and 2560 × 1440 camera resolutions; the detector now analyses up to 960 px wide for more detail on far squares.

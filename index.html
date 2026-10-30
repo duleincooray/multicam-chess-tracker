@@ -47,7 +47,20 @@
     </section>
 
     <section class="center" aria-label="Board">
-      <div class="board-frame"><div id="board" class="board" aria-label="Current position"></div></div>
+      <div class="board-frame">
+        <div id="board" class="board" aria-label="Current position"></div>
+        <div id="result" class="result" hidden role="dialog" aria-labelledby="resultKind">
+          <div class="result-card">
+            <p id="resultKind" class="result-kind">Checkmate</p>
+            <p id="resultWho" class="result-who"></p>
+            <p id="resultScore" class="result-score"></p>
+            <div class="row">
+              <button id="btnResultSave" class="primary">New game</button>
+              <button id="btnResultClose" class="ghost">Back to board</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="dock">
         <button id="btnTrack" class="dock-main" disabled title="Start or pause tracking (Space)">
           <svg><use href="#i-play"/></svg><span>Start tracking</span>
@@ -70,7 +83,7 @@
         <input id="manualMove" placeholder="Type a missed move" autocomplete="off" aria-label="Manual move">
       </form>
       <div class="sheet-actions">
-        <button id="btnSaveGame" class="primary" title="Save this game and start a new one">Save &amp; new</button>
+        <button id="btnSaveGame" class="primary" title="Every game is saved automatically. This starts a fresh one.">New game</button>
         <button id="btnDownload" class="icon" title="Download PGN" aria-label="Download PGN"><svg><use href="#i-down"/></svg></button>
         <button id="btnCopy" class="icon" title="Copy PGN" aria-label="Copy PGN"><svg><use href="#i-copy"/></svg></button>
       </div>

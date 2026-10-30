@@ -194,6 +194,32 @@ button.chip {
 .folder-line { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .folder-line:empty { display: none; }
 
+/* game over */
+.board-frame { position: relative; }
+.result {
+  position: absolute; inset: 0; display: grid; place-items: center; border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 35%, transparent);
+  animation: fade .4s 1.2s var(--ease) both; z-index: 4; /* let the king topple first */
+}
+.result-card {
+  text-align: center; padding: 26px 34px 22px; border-radius: 16px; background: var(--surface);
+  border: 1px solid var(--line); box-shadow: 0 24px 50px -24px rgba(20, 12, 4, .55);
+  animation: pop .5s 1.2s cubic-bezier(.2, 1.4, .3, 1) both;
+}
+.result.mate .result-card { border-color: var(--brass); }
+.result-kind { margin: 0; font: 500 clamp(30px, 4vw, 46px)/1.05 var(--book); }
+.result.mate .result-kind { color: var(--walnut); }
+.result-who { margin: 8px 0 2px; color: var(--muted); }
+.result-score { margin: 0 0 16px; font: 500 22px var(--book); letter-spacing: .04em; }
+.result .row { justify-content: center; }
+.pc.mated { animation: topple .9s .25s cubic-bezier(.5, 0, .3, 1.3) forwards; transform-origin: 50% 85%; }
+.pc.victor { animation: crown 1.2s .2s ease-in-out 2; }
+@keyframes topple { to { transform: rotate(-82deg) translate(-8%, 6%); opacity: .8; } }
+@keyframes crown { 50% { transform: translateY(-14%) scale(1.12); filter: drop-shadow(0 0 10px var(--brass)); } }
+@keyframes fade { from { opacity: 0; } }
+@keyframes pop { from { opacity: 0; transform: scale(.85) translateY(10px); } }
+.confetti { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 20; }
+
 /* ── setup drawer ────────────────────────────────── */
 .scrim { position: fixed; inset: 0; background: rgba(10, 14, 12, .32); opacity: 0; transition: opacity .25s; z-index: 10; }
 .scrim.open { opacity: 1; }

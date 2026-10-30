@@ -330,15 +330,118 @@ function playMove(mv) {
 
   const num = Math.ceil(state.game.history().length / 2);
   let msg = `${num}${res.color === 'w' ? '.' : '…'} ${res.san} recorded. ${turnName()} to move.`;
-  if (state.game.isCheckmate()) msg = `${res.san}: checkmate! ${res.color === 'w' ? 'White' : 'Black'} wins.`;
-  else if (state.game.isDraw()) msg = `${res.san}: draw.`;
+  if (state.game.isGameOver()) {
+    celebrate(res);
+    return true;
+  }
   setStatus(msg, 'ok');
   return true;
+}
+
+// ───────────────────────────────────────── game over
+
+const PLAYER = (color) => (color === 'w' ? $('white').value || 'White' : $('black').value || 'Black');
+
+function celebrate(lastMove) {
+  const g = state.game;
+  const mate = g.isCheckmate();
+  const winner = lastMove.color; // the side that just moved delivered mate
+  let kind = 'Draw', who = '', score = '½–½';
+  if (mate) {
+    kind = 'Checkmate';
+    who = `${PLAYER(winner)} wins with ${lastMove.san}`;
+    score = winner === 'w' ? '1–0' : '0–1';
+  } else if (g.isStalemate()) { kind = 'Stalemate'; who = 'No legal moves, but no check.'; }
+  else if (g.isThreefoldRepetition()) who = 'Threefold repetition.';
+  else if (g.isInsufficientMaterial()) who = 'Not enough material to mate.';
+  else who = 'Fifty-move rule.';
+
+  setTracking(false);
+  const ended = mate ? `Checkmate. ${PLAYER(winner)} wins ${score}.` : `${kind}. Game drawn.`;
+  setStatus(`${ended} Game saved.`, 'ok');
+  saveFinishedGame().then((note) => setStatus(`${ended} Game saved.${note}`, 'ok'));
+  $('resultKind').textContent = kind;
+  $('resultWho').textContent = who;
+  $('resultScore').textContent = score;
+  const box = $('result');
+  box.classList.toggle('mate', mate);
+  box.hidden = false;
+  $('btnResultSave').focus({ preventScroll: true });
+  if (mate) {
+    fanfare();
+    if (!reduceMotion()) confetti(winner);
+  }
+}
+
+function hideResult() { $('result').hidden = true; }
+
+function fanfare() {
+  if (!settings.sound) return;
+  try {
+    state.audio ??= new AudioContext();
+    const t0 = state.audio.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      const o = state.audio.createOscillator(), gn = state.audio.createGain();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      const t = t0 + i * 0.12;
+      gn.gain.setValueAtTime(0.0001, t);
+      gn.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+      gn.gain.exponentialRampToValueAtTime(0.0001, t + (i === 3 ? 0.9 : 0.25));
+      o.connect(gn).connect(state.audio.destination);
+      o.start(t);
+      o.stop(t + 1);
+    });
+  } catch { /* sound is optional */ }
+}
+
+/** A short burst of confetti from the board, in board and piece colours. */
+function confetti(winner) {
+  const cv = document.createElement('canvas');
+  cv.className = 'confetti';
+  const dpr = devicePixelRatio || 1;
+  cv.width = innerWidth * dpr;
+  cv.height = innerHeight * dpr;
+  document.body.appendChild(cv);
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const r = $('board').getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height * 0.45;
+  const colors = winner === 'w'
+    ? ['#fffdf8', '#ead7b5', '#c08a2d', '#e9c46a', '#a7774d']
+    : ['#1f1712', '#5b3720', '#c08a2d', '#e9c46a', '#a7774d'];
+  const parts = Array.from({ length: 180 }, () => {
+    const a = Math.random() * Math.PI * 2, v = 6 + Math.random() * 12;
+    return {
+      x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 7,
+      w: 6 + Math.random() * 7, h: 3 + Math.random() * 5, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+      c: colors[(Math.random() * colors.length) | 0], glyph: Math.random() < 0.06 ? '♚♛♞♜'[(Math.random() * 4) | 0] : null,
+    };
+  });
+  const start = performance.now();
+  (function frame(now) {
+    const t = now - start;
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    for (const p of parts) {
+      p.vy += 0.32; p.vx *= 0.985; p.vy *= 0.985;
+      p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - t / 3200);
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.c;
+      if (p.glyph) { ctx.font = '22px serif'; ctx.fillText(p.glyph, -8, 8); }
+      else ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    if (t < 3300) requestAnimationFrame(frame); else cv.remove();
+  })(start);
 }
 
 function undoMove() {
   const undone = state.game.undo();
   if (!undone) return;
+  hideResult();
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
   state.marks = { squares: [], kind: 'ok' };
   hideChoice();
@@ -376,12 +479,44 @@ let autosaveChain = Promise.resolve();
 function saveCurrent() {
   const cur = store.get('current', {});
   const started = cur.started || new Date().toISOString();
+  const id = cur.id || Date.parse(started) || Date.now();
   const white = $('white').value, black = $('black').value, event = $('event').value;
   const file = pgnName(white || 'White', black || 'Black', started, event || 'Casual game');
-  store.set('current', { started, pgn: state.game.pgn(), white, black, event, file });
+  const downloaded = state.game.isGameOver() ? cur.downloaded : false; // re-download if a finished game changes
+  store.set('current', { ...cur, id, started, pgn: state.game.pgn(), white, black, event, file, downloaded });
+  upsertCurrentGame();
   if (state.game.history().length || cur.file) {
     autosaveChain = autosaveChain.then(() => autosave(file, cur.file)).catch((err) => console.warn('Autosave failed', err));
   }
+}
+
+/** Keep the game in progress in the Saved games list, so every game is saved without pressing anything. */
+function upsertCurrentGame() {
+  const cur = store.get('current', {});
+  if (!cur.id) return;
+  let games = store.get('games', []).filter((g) => g.id !== cur.id);
+  const n = state.game.history().length;
+  if (n) {
+    const h = headers();
+    const pgn = currentPgn();
+    games.unshift({
+      id: cur.id, date: cur.started, white: h.White, black: h.Black, event: h.Event,
+      result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: n, pgn, file: cur.file,
+      inProgress: !state.game.isGameOver(),
+    });
+  }
+  if (!store.set('games', games)) setStatus('This browser is out of storage space. Choose a games folder to keep saving.', 'warn');
+  renderSaved();
+}
+
+/** When a game ends without a games folder, download its PGN once so it's on disk. */
+async function saveFinishedGame() {
+  await autosaveChain;
+  const cur = store.get('current', {});
+  if (folder.folderName() || cur.downloaded || !state.game.history().length) return '';
+  download(currentPgn(), cur.file);
+  store.set('current', { ...cur, downloaded: true });
+  return ` Downloaded ${cur.file}.`;
 }
 
 async function autosave(file, oldFile) {
@@ -409,47 +544,24 @@ function restoreCurrent() {
 }
 
 async function saveAndNewGame() {
-  let note = 'Game saved.';
+  let note = 'New game.';
   if (state.game.history().length) {
-    const games = store.get('games', []);
-    const h = headers();
-    const pgn = currentPgn();
-    const date = new Date().toISOString();
-    await autosaveChain; // let any in-flight autosave finish first
-    const g = {
-      id: Date.now(), date, white: h.White, black: h.Black, event: h.Event,
-      result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: state.game.history().length, pgn,
-      // same name as the autosaved file, so the final save replaces it
-      file: store.get('current', {}).file || pgnName(h.White, h.Black, date, h.Event),
-    };
-    games.unshift(g);
-    if (!store.set('games', games)) note = 'Could not keep it in this browser.';
-    note += ' ' + await writePgnFile(g.file, pgn);
+    upsertCurrentGame();
+    note = 'Previous game saved.' + (folder.folderName()
+      ? ` It's in ${folder.folderName()}/${store.get('current', {}).file}.`
+      : await saveFinishedGame());
   }
   state.game = new Chess();
-  store.set('current', { started: new Date().toISOString(), pgn: '', white: $('white').value, black: $('black').value, event: $('event').value });
+  const started = new Date().toISOString();
+  store.set('current', { id: Date.now(), started, pgn: '', white: $('white').value, black: $('black').value, event: $('event').value });
   state.autosavedFile = null;
+  hideResult();
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
   state.marks = { squares: [], kind: 'ok' };
   hideChoice();
   renderGame();
   renderSaved();
   setStatus(`${note} Set up the pieces for a new game.`, 'ok');
-}
-
-/** Save a PGN into the games folder if one is set, otherwise download it. Returns a status note. */
-async function writePgnFile(name, pgn) {
-  if (folder.folderName()) {
-    try {
-      if (await folder.writeFile(name, pgn)) return `Written to ${folder.folderName()}/${name}.`;
-    } catch (err) {
-      console.warn('Folder write failed', err);
-    }
-    download(pgn, name);
-    return 'Could not write to the games folder, so it was downloaded instead.';
-  }
-  download(pgn, name);
-  return `Downloaded ${name}.`;
 }
 
 async function chooseFolder() {
@@ -542,7 +654,11 @@ function renderBoard() {
       const sq = document.createElement('div');
       sq.dataset.sq = name;
       sq.className = `sq ${(file + rank) % 2 ? 'light' : 'dark'}${lit.has(name) ? ' hl' : ''}`;
-      if (p) sq.innerHTML = `<span class="pc ${p.color}">${GLYPH[p.type]}</span>`;
+      if (p) {
+        let extra = '';
+        if (p.type === 'k' && state.game.isCheckmate()) extra = p.color === state.game.turn() ? ' mated' : ' victor';
+        sq.innerHTML = `<span class="pc ${p.color}${extra}">${GLYPH[p.type]}</span>`;
+      }
       if (vr === 7) sq.insertAdjacentHTML('beforeend', `<span class="coord file">${'abcdefgh'[file]}</span>`);
       if (vf === 0) sq.insertAdjacentHTML('beforeend', `<span class="coord rank">${rank + 1}</span>`);
       board.appendChild(sq);
@@ -619,9 +735,9 @@ function renderSaved() {
     li.innerHTML = `<div class="info"><div class="title"></div><div class="meta"></div></div>
       <div class="acts"><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
       <button data-act="del" class="ghost">Delete</button></div>`;
-    li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.result}`;
+    li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.inProgress ? '(in progress)' : g.result}`;
     li.querySelector('.meta').textContent =
-      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} moves, ${new Date(g.date).toLocaleString()}`;
+      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} move${Math.ceil(g.moves / 2) === 1 ? '' : 's'}, ${new Date(g.date).toLocaleString()}`;
     li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, g.file || pgnName(g.white, g.black, g.date, g.event));
     li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
     li.querySelector('[data-act="del"]').onclick = () => {
@@ -656,6 +772,12 @@ function editSaved(li, g) {
     const oldFile = g.file;
     fields.file = pgnName(fields.white, fields.black, g.date, fields.event);
     updateSavedGame(g.id, fields);
+    if (g.id === store.get('current', {}).id) {
+      $('white').value = fields.white === 'White' ? '' : fields.white;
+      $('black').value = fields.black === 'Black' ? '' : fields.black;
+      $('event').value = fields.event === 'Casual game' ? '' : fields.event;
+      saveCurrent();
+    }
     renderSaved();
     let note = 'Game renamed.';
     if (folder.folderName() && oldFile) {
@@ -862,7 +984,7 @@ function init() {
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (k === ' ') { e.preventDefault(); if (!$('btnTrack').disabled) setTracking(!state.tracking); }
+    if (k === ' ') { e.preventDefault(); if (!$('btnTrack').disabled && !state.game.isGameOver()) setTracking(!state.tracking); }
     else if (k === 'u') undoMove();
     else if (k === 'b') rebaseline();
     else if (k === 'm') { e.preventDefault(); $('manualMove').focus(); }
@@ -870,6 +992,8 @@ function init() {
     else if (k === 'escape') closeDrawer();
   });
   $('btnSettings').onclick = () => openDrawer();
+  $('btnResultSave').onclick = () => { hideResult(); saveAndNewGame(); };
+  $('btnResultClose').onclick = hideResult;
   $('btnOpenSetup').onclick = () => openDrawer('cameras');
   $('btnCloseDrawer').onclick = closeDrawer;
   $('scrim').onclick = closeDrawer;
