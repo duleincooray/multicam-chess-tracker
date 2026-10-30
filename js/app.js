@@ -5,6 +5,7 @@ import {
 } from './vision.js';
 import { inferMove, touchedSquares, buildPgn, sqIndex } from './tracker.js';
 import * as store from './storage.js';
+import * as folder from './folder.js';
 
 const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false };
 const WORK_W_MAX = 960; // max width of the image the detector analyses (more detail on far squares)
@@ -355,16 +356,21 @@ function restoreCurrent() {
   }
 }
 
-function saveAndNewGame() {
+async function saveAndNewGame() {
+  let note = 'Game saved.';
   if (state.game.history().length) {
     const games = store.get('games', []);
     const h = headers();
     const pgn = currentPgn();
-    games.unshift({
-      id: Date.now(), date: new Date().toISOString(), white: h.White, black: h.Black, event: h.Event,
+    const date = new Date().toISOString();
+    const g = {
+      id: Date.now(), date, white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: state.game.history().length, pgn,
-    });
-    if (!store.set('games', games)) setStatus('Could not save in this browser; download the PGN instead.', 'warn');
+      file: pgnName(h.White, h.Black, date, h.Event),
+    };
+    games.unshift(g);
+    if (!store.set('games', games)) note = 'Could not keep it in this browser.';
+    note += ' ' + await writePgnFile(g.file, pgn);
   }
   state.game = new Chess();
   store.set('current', { started: new Date().toISOString(), pgn: '', white: $('white').value, black: $('black').value, event: $('event').value });
@@ -373,7 +379,57 @@ function saveAndNewGame() {
   hideChoice();
   renderGame();
   renderSaved();
-  setStatus('Game saved. Set up the pieces for a new game.', 'ok');
+  setStatus(`${note} Set up the pieces for a new game.`, 'ok');
+}
+
+/** Save a PGN into the games folder if one is set, otherwise download it. Returns a status note. */
+async function writePgnFile(name, pgn) {
+  if (folder.folderName()) {
+    try {
+      if (await folder.writeFile(name, pgn)) return `Written to ${folder.folderName()}/${name}.`;
+    } catch (err) {
+      console.warn('Folder write failed', err);
+    }
+    download(pgn, name);
+    return 'Could not write to the games folder, so it was downloaded instead.';
+  }
+  download(pgn, name);
+  return `Downloaded ${name}.`;
+}
+
+async function chooseFolder() {
+  try {
+    await folder.choose();
+    renderFolder();
+    setStatus(`Games will be saved to "${folder.folderName()}".`, 'ok');
+  } catch (err) {
+    if (err.name !== 'AbortError') setStatus(`Could not use that folder: ${err.message}`, 'warn');
+  }
+}
+
+async function exportAll() {
+  const games = store.get('games', []);
+  let n = 0;
+  for (const g of games) {
+    g.file ||= pgnName(g.white, g.black, g.date, g.event);
+    try { if (await folder.writeFile(g.file, g.pgn)) n++; } catch { /* reported below */ }
+  }
+  store.set('games', games);
+  setStatus(n === games.length ? `Saved ${n} games to "${folder.folderName()}".`
+    : `Saved ${n} of ${games.length} games. Check the folder permission and try again.`, n === games.length ? 'ok' : 'warn');
+}
+
+function renderFolder() {
+  if (!folder.supported) {
+    $('btnFolder').hidden = true;
+    $('folderName').textContent = 'not available in this browser';
+    $('folderHint').textContent = 'Saving to a folder needs Chrome or Edge. Games download to your Downloads folder instead.';
+    return;
+  }
+  const name = folder.folderName();
+  $('folderName').textContent = name ?? 'not set (games go to Downloads)';
+  $('btnFolder').textContent = name ? 'Change folder…' : 'Choose folder…';
+  $('btnExportAll').hidden = !name || store.get('games', []).length === 0;
 }
 
 function download(text, name) {
@@ -387,7 +443,10 @@ function download(text, name) {
 function pgnName(white, black, iso, event) {
   const safe = (s) => String(s).replace(/[^\w-]+/g, '_').slice(0, 30);
   const name = event && event !== 'Casual game' ? `${safe(event)}_` : '';
-  return `${iso.slice(0, 10)}_${name}${safe(white)}_vs_${safe(black)}.pgn`;
+  // Local date and time, so two games on the same day never overwrite each other.
+  const d = new Date(iso), pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `${stamp}_${name}${safe(white)}_vs_${safe(black)}.pgn`;
 }
 
 // ───────────────────────────────────────── rendering
@@ -454,6 +513,7 @@ function savedTitle(g) {
 }
 
 function renderSaved() {
+  renderFolder();
   const ul = $('saved');
   ul.innerHTML = '';
   for (const g of store.get('games', [])) {
@@ -464,7 +524,7 @@ function renderSaved() {
     li.querySelector('.title').textContent = `${savedTitle(g)} · ${g.result}`;
     li.querySelector('.meta').textContent =
       `${g.white} vs ${g.black} · ${new Date(g.date).toLocaleString()} · ${Math.ceil(g.moves / 2)} moves`;
-    li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, pgnName(g.white, g.black, g.date, g.event));
+    li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, g.file || pgnName(g.white, g.black, g.date, g.event));
     li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
     li.querySelector('[data-act="del"]').onclick = () => {
       if (!confirm('Delete this saved game?')) return;
@@ -488,15 +548,28 @@ function editSaved(li, g) {
   f.black.value = g.black;
   f.event.focus();
   f.querySelector('button[type="button"]').onclick = renderSaved;
-  f.onsubmit = (e) => {
+  f.onsubmit = async (e) => {
     e.preventDefault();
-    updateSavedGame(g.id, {
+    const fields = {
       event: f.event.value.trim() || 'Casual game',
       white: f.white.value.trim() || 'White',
       black: f.black.value.trim() || 'Black',
-    });
+    };
+    const oldFile = g.file;
+    fields.file = pgnName(fields.white, fields.black, g.date, fields.event);
+    updateSavedGame(g.id, fields);
     renderSaved();
-    setStatus('Game renamed.', 'ok');
+    let note = 'Game renamed.';
+    if (folder.folderName() && oldFile) {
+      const updated = store.get('games', []).find((x) => x.id === g.id);
+      try {
+        if (await folder.writeFile(updated.file, updated.pgn)) {
+          if (oldFile !== updated.file) await folder.removeFile(oldFile);
+          note += ` File is now ${updated.file}.`;
+        }
+      } catch { note += ' The file in the games folder was not updated.'; }
+    }
+    setStatus(note, 'ok');
   };
 }
 
@@ -670,6 +743,9 @@ function init() {
     catch { setStatus('Could not copy; use Download PGN instead.', 'warn'); }
   };
   $('btnSaveGame').onclick = saveAndNewGame;
+  $('btnFolder').onclick = chooseFolder;
+  $('btnExportAll').onclick = exportAll;
+  folder.load().then(renderFolder);
   for (const id of ['white', 'black', 'event']) $(id).addEventListener('change', saveCurrent);
 
   $('manualForm').addEventListener('submit', (e) => {

@@ -110,8 +110,16 @@
         </div>
 
         <h2>Saved games</h2>
+        <div class="folder">
+          <span>Games folder: <strong id="folderName">not set</strong></span>
+          <div class="row">
+            <button id="btnFolder">Choose folder…</button>
+            <button id="btnExportAll" class="ghost" hidden>Save all to folder</button>
+          </div>
+        </div>
+        <p id="folderHint" class="hint">Pick a folder and every game you save is written there as a .pgn file.
+          Without a folder, games download to your Downloads folder.</p>
         <ul id="saved" class="saved"></ul>
-        <p class="hint">Saved games stay in this browser. Download them to keep a copy.</p>
       </section>
     </div>
 
