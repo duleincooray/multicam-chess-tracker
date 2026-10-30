@@ -336,13 +336,31 @@ function currentPgn() {
   return buildPgn(g, headers());
 }
 
+let autosaveChain = Promise.resolve();
+
+/** Remember the game in the browser and, if a games folder is set, write it there after every move. */
 function saveCurrent() {
   const cur = store.get('current', {});
-  store.set('current', {
-    started: cur.started || new Date().toISOString(),
-    pgn: state.game.pgn(),
-    white: $('white').value, black: $('black').value, event: $('event').value,
-  });
+  const started = cur.started || new Date().toISOString();
+  const white = $('white').value, black = $('black').value, event = $('event').value;
+  const file = pgnName(white || 'White', black || 'Black', started, event || 'Casual game');
+  store.set('current', { started, pgn: state.game.pgn(), white, black, event, file });
+  if (state.game.history().length || cur.file) {
+    autosaveChain = autosaveChain.then(() => autosave(file, cur.file)).catch((err) => console.warn('Autosave failed', err));
+  }
+}
+
+async function autosave(file, oldFile) {
+  if (!folder.folderName()) return;
+  if (!(await folder.ensurePermission(false))) {
+    state.needsFolderPermission = true;
+    renderFolder();
+    return;
+  }
+  await folder.writeFile(file, currentPgn());
+  if (oldFile && oldFile !== file) await folder.removeFile(oldFile);
+  state.autosavedFile = file;
+  renderFolder();
 }
 
 function restoreCurrent() {
@@ -363,10 +381,12 @@ async function saveAndNewGame() {
     const h = headers();
     const pgn = currentPgn();
     const date = new Date().toISOString();
+    await autosaveChain; // let any in-flight autosave finish first
     const g = {
       id: Date.now(), date, white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: state.game.history().length, pgn,
-      file: pgnName(h.White, h.Black, date, h.Event),
+      // same name as the autosaved file, so the final save replaces it
+      file: store.get('current', {}).file || pgnName(h.White, h.Black, date, h.Event),
     };
     games.unshift(g);
     if (!store.set('games', games)) note = 'Could not keep it in this browser.';
@@ -374,6 +394,7 @@ async function saveAndNewGame() {
   }
   state.game = new Chess();
   store.set('current', { started: new Date().toISOString(), pgn: '', white: $('white').value, black: $('black').value, event: $('event').value });
+  state.autosavedFile = null;
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
   state.marks = { squares: [], kind: 'ok' };
   hideChoice();
@@ -398,9 +419,20 @@ async function writePgnFile(name, pgn) {
 }
 
 async function chooseFolder() {
+  if (state.needsFolderPermission && folder.folderName()) {
+    if (await folder.ensurePermission(true)) {
+      state.needsFolderPermission = false;
+      renderFolder();
+      saveCurrent();
+      setStatus(`Auto-saving to "${folder.folderName()}" again.`, 'ok');
+    }
+    return;
+  }
   try {
     await folder.choose();
+    state.needsFolderPermission = false;
     renderFolder();
+    saveCurrent(); // write the game in progress straight away
     setStatus(`Games will be saved to "${folder.folderName()}".`, 'ok');
   } catch (err) {
     if (err.name !== 'AbortError') setStatus(`Could not use that folder: ${err.message}`, 'warn');
@@ -427,8 +459,16 @@ function renderFolder() {
     return;
   }
   const name = folder.folderName();
-  $('folderName').textContent = name ?? 'not set (games go to Downloads)';
-  $('btnFolder').textContent = name ? 'Change folder…' : 'Choose folder…';
+  if (name && state.needsFolderPermission) {
+    $('folderName').textContent = `${name} (paused: click Allow to keep auto-saving)`;
+    $('btnFolder').textContent = 'Allow';
+  } else {
+    $('folderName').textContent = name ?? 'not set (games go to Downloads)';
+    $('btnFolder').textContent = name ? 'Change folder…' : 'Choose folder…';
+  }
+  $('folderHint').textContent = name
+    ? `Auto-saving after every move${state.autosavedFile ? ` to ${state.autosavedFile}` : ''}.`
+    : 'Pick a folder and the game is saved there as a .pgn file after every move. Without a folder, games download to your Downloads folder when you press Save & new game.';
   $('btnExportAll').hidden = !name || store.get('games', []).length === 0;
 }
 
@@ -445,7 +485,7 @@ function pgnName(white, black, iso, event) {
   const name = event && event !== 'Casual game' ? `${safe(event)}_` : '';
   // Local date and time, so two games on the same day never overwrite each other.
   const d = new Date(iso), pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   return `${stamp}_${name}${safe(white)}_vs_${safe(black)}.pgn`;
 }
 
@@ -745,7 +785,10 @@ function init() {
   $('btnSaveGame').onclick = saveAndNewGame;
   $('btnFolder').onclick = chooseFolder;
   $('btnExportAll').onclick = exportAll;
-  folder.load().then(renderFolder);
+  folder.load().then(async (h) => {
+    if (h) state.needsFolderPermission = !(await folder.ensurePermission(false));
+    renderFolder();
+  });
   for (const id of ['white', 'black', 'event']) $(id).addEventListener('change', saveCurrent);
 
   $('manualForm').addEventListener('submit', (e) => {
