@@ -115,3 +115,20 @@ export function labelsCsv(entries) {
   }
   return toCsv([head, ...rows]);
 }
+
+/**
+ * Clock time left for each side, from the recorded move times.
+ * meta: per-move { emt }; tc: { base, inc }; now and startAt in ms; turn: 'w' | 'b'.
+ * The side to move is charged the time since the last move (or since startAt before the first move).
+ */
+export function clockState(meta, tc, turn, now, startAt) {
+  if (!tc) return null;
+  const left = { w: tc.base * 1000, b: tc.base * 1000 };
+  meta.forEach((m, i) => {
+    const side = i % 2 === 0 ? 'w' : 'b';
+    left[side] += -(m.emt || 0) + tc.inc * 1000;
+  });
+  const since = meta.at(-1)?.at ?? startAt;
+  if (since != null) left[turn] -= Math.max(0, now - since);
+  return { w: Math.max(0, left.w), b: Math.max(0, left.b), running: since != null ? turn : null };
+}

@@ -7,13 +7,18 @@ import { inferMove, touchedSquares, buildPgn, sqIndex, reconsiderLastMove } from
 import * as store from './storage.js';
 import * as folder from './folder.js';
 import {
-  parseTimeControl, timedGame, summarize, totals, accuracyCsv, labelsCsv,
+  parseTimeControl, timedGame, summarize, totals, accuracyCsv, labelsCsv, clockState, formatClock,
 } from './research.js';
+import { material, sanToWords } from './boardinfo.js';
+import { openingFor } from './openings.js';
+import { pngBlob, gifBlob, openInLichess } from './share.js';
+import { Engine } from './engine.js';
+import { winPercent, formatEval, judgeMoves, reviewSummary } from './analysis.js';
 
-const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false, dataset: true, timeControl: '' };
+const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false, dataset: true, timeControl: '', zoom: true, speak: false };
 const WORK_W_MAX = 960; // max width of the image the detector analyses (more detail on far squares)
 const TICK_MS = 100;    // detector runs ~10 times a second
-const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+const PIECE_NAME = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
 
 const $ = (id) => document.getElementById(id);
 const settings = { ...DEFAULTS, ...store.get('settings', {}) };
@@ -30,6 +35,8 @@ const state = {
   pending: null,
   prevRefs: null,
   stats: {},
+  anaToken: 0,
+  engine: null,
   meta: [],        // one entry per recorded move: where it came from, confidence, time
   events: [],      // everything that happened, including moves later undone or corrected
   clockStart: null,
@@ -183,7 +190,8 @@ async function addCamera(key, deviceId, stream) {
   const label = stream.getVideoTracks()[0]?.label || `Camera ${key}`;
   const cam = {
     key, deviceId, label, stream, video, el, canvas, ctx: canvas.getContext('2d'), work, wctx,
-    corners: [], calibrating: false, sampler: null, prev: null, cur: null, ref: null, motion: 1, scores: null,
+    corners: [], calibrating: false, adjusting: false, sampler: null, prev: null, cur: null, ref: null, motion: 1, scores: null,
+    view: { x: 0, y: 0, w: 1, h: 1 }, hover: null, drag: -1,
   };
   el.querySelector('.cam-title').textContent = `Camera ${key}`;
   el.querySelector('.cam-state').textContent = `${label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/i, '')}, ${vw}×${vh}`;
@@ -192,7 +200,12 @@ async function addCamera(key, deviceId, stream) {
   if (savedCorners?.length === 4) applyCorners(cam, savedCorners);
 
   canvas.addEventListener('click', (e) => onCanvasClick(cam, e));
+  canvas.addEventListener('pointermove', (e) => onCanvasMove(cam, e));
+  canvas.addEventListener('pointerdown', (e) => onCanvasDown(cam, e));
+  canvas.addEventListener('pointerup', (e) => onCanvasUp(cam, e));
+  canvas.addEventListener('pointerleave', () => { cam.hover = null; });
   el.querySelector('.btn-calibrate').addEventListener('click', () => startCalibration(cam));
+  el.querySelector('.btn-adjust').addEventListener('click', () => toggleAdjust(cam));
   el.querySelector('.btn-undo-point').addEventListener('click', () => { cam.corners.pop(); updateCamHint(cam); });
   stream.getVideoTracks()[0]?.addEventListener('ended', () => setStatus(`Camera ${key} disconnected.`, 'warn'));
 
@@ -213,18 +226,71 @@ function startCalibration(cam) {
   updateButtons();
 }
 
+/** Pointer position as normalised video coordinates (0..1), allowing for the zoomed view. */
+function pointerToVideo(cam, e) {
+  const r = cam.canvas.getBoundingClientRect();
+  const { x, y, w, h } = cam.view;
+  return [x + ((e.clientX - r.left) / r.width) * w, y + ((e.clientY - r.top) / r.height) * h];
+}
+
+function onCanvasMove(cam, e) {
+  if (!cam.calibrating && !cam.adjusting) return;
+  cam.hover = pointerToVideo(cam, e);
+  if (cam.drag >= 0) {
+    cam.corners[cam.drag] = cam.hover;
+    try { cam.sampler = buildSampler(cam.corners, cam.work.width, cam.work.height); } catch { /* corners crossing mid-drag */ }
+  }
+}
+
+function onCanvasDown(cam, e) {
+  if (!cam.adjusting) return;
+  const [u, v] = pointerToVideo(cam, e);
+  const r = cam.canvas.getBoundingClientRect();
+  // nearest corner within ~18 screen pixels
+  let best = -1, bestD = 18;
+  cam.corners.forEach(([cu, cv], i) => {
+    const d = Math.hypot((cu - u) / cam.view.w * r.width, (cv - v) / cam.view.h * r.height);
+    if (d < bestD) { best = i; bestD = d; }
+  });
+  if (best >= 0) { cam.drag = best; cam.canvas.setPointerCapture(e.pointerId); }
+}
+
+function onCanvasUp(cam) {
+  if (cam.drag < 0) return;
+  cam.drag = -1;
+  try {
+    applyCorners(cam, cam.corners);
+    saveCalibration(cam);
+  } catch (err) {
+    setStatus(`Those corners don't make a board (${err.message}). Drag them back into place.`, 'warn');
+  }
+}
+
+function saveCalibration(cam) {
+  const all = store.get('calib', {});
+  all[cam.deviceId] = cam.corners;
+  store.set('calib', all);
+  for (const c of state.cams) { c.ref = null; c.prev = null; } // read the board afresh
+  state.prevRefs = null;
+}
+
+function toggleAdjust(cam) {
+  cam.adjusting = !cam.adjusting;
+  if (cam.adjusting) setTracking(false);
+  updateView(cam);
+  updateCamHint(cam);
+  updateButtons();
+}
+
 function onCanvasClick(cam, e) {
   if (!cam.calibrating || cam.corners.length >= 4) return;
-  const r = cam.canvas.getBoundingClientRect();
-  cam.corners.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
+  cam.corners.push(pointerToVideo(cam, e));
   if (cam.corners.length === 4) {
     try {
       applyCorners(cam, cam.corners);
-      const all = store.get('calib', {});
-      all[cam.deviceId] = cam.corners;
-      store.set('calib', all);
+      saveCalibration(cam);
       cam.calibrating = false;
-      for (const c of state.cams) c.ref = null; // read the board afresh
+      updateView(cam);
     } catch (err) {
       cam.corners = [];
       setStatus(`Calibration failed (${err.message}). Click the four corners again.`, 'warn');
@@ -237,6 +303,24 @@ function onCanvasClick(cam, e) {
 function applyCorners(cam, corners) {
   cam.corners = corners.map((p) => [...p]);
   cam.sampler = buildSampler(cam.corners, cam.work.width, cam.work.height);
+  updateView(cam);
+}
+
+/** Zoom the preview to the board once it's calibrated; show the whole picture while calibrating. */
+function updateView(cam) {
+  const vw = cam.video.videoWidth, vh = cam.video.videoHeight;
+  let view = { x: 0, y: 0, w: 1, h: 1 };
+  if (settings.zoom && cam.sampler && !cam.calibrating && !cam.adjusting && cam.corners.length === 4) {
+    const xs = cam.corners.map((p) => p[0]), ys = cam.corners.map((p) => p[1]);
+    let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const mx = (x1 - x0) * 0.07, my = (y1 - y0) * 0.12; // a little room for tall pieces on the far rank
+    x0 = Math.max(0, x0 - mx); x1 = Math.min(1, x1 + mx); y0 = Math.max(0, y0 - my * 1.6); y1 = Math.min(1, y1 + my);
+    view = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  cam.view = view;
+  const pw = view.w * vw, ph = view.h * vh;
+  const cw = Math.round(Math.min(960, pw)), ch = Math.round((cw * ph) / pw);
+  if (cam.canvas.width !== cw || cam.canvas.height !== ch) { cam.canvas.width = cw; cam.canvas.height = ch; }
 }
 
 function updateCamHint(cam) {
@@ -245,7 +329,14 @@ function updateCamHint(cam) {
   cam.el.classList.toggle('calibrating', cam.calibrating);
   undo.hidden = !cam.calibrating || cam.corners.length === 0;
   cam.el.querySelector('.btn-calibrate').textContent = cam.sampler ? 'Recalibrate' : 'Calibrate';
-  if (cam.calibrating) {
+  cam.el.querySelector('.btn-calibrate').hidden = cam.adjusting;
+  const adj = cam.el.querySelector('.btn-adjust');
+  adj.hidden = !cam.sampler || cam.calibrating;
+  adj.textContent = cam.adjusting ? 'Done' : 'Adjust corners';
+  cam.el.classList.toggle('adjusting', cam.adjusting);
+  if (cam.adjusting) {
+    hint.textContent = 'Drag the red corner dots onto the board corners';
+  } else if (cam.calibrating) {
     hint.textContent = `Click the outer corner of ${CORNER_ORDER[cam.corners.length]} (${cam.corners.length + 1} of 4)`;
   } else if (cam.sampler) {
     hint.textContent = '';
@@ -390,6 +481,7 @@ function playMove(mv, opts = {}) {
   saveCurrent();
   renderGame();
   beep();
+  speak((opts.note ? 'Correction. ' : '') + sanToWords(res.san));
 
   const num = Math.ceil(state.game.history().length / 2);
   let msg = `${opts.note ? opts.note + ' ' : ''}${num}${res.color === 'w' ? '.' : '…'} ${res.san} recorded. ${turnName()} to move.`;
@@ -641,6 +733,7 @@ async function saveAndNewGame() {
   state.prevRefs = null;
   state.meta = [];
   state.events = [];
+  state.flagged = null;
   state.clockStart = state.tracking ? Date.now() : null;
   const started = new Date().toISOString();
   $('event').value = ''; // a new game gets its own name; players carry over
@@ -712,9 +805,55 @@ function renderFolder() {
       : `Auto-saving to ${name}${state.autosavedFile ? `/${state.autosavedFile}` : ''}`;
 }
 
-function download(text, name) {
+function openMenu() { $('exportMenu').hidden = false; $('btnExport').setAttribute('aria-expanded', 'true'); }
+function closeMenu() { $('exportMenu').hidden = true; $('btnExport').setAttribute('aria-expanded', 'false'); }
+
+/** The game on screen: the live game, or the saved game being reviewed. */
+function viewedGameInfo() {
+  if (state.review) {
+    const g = state.review.meta;
+    return { pgn: g.pgn, file: g.file || pgnName(g.white, g.black, g.date, g.event), moves: state.review.moves, white: g.white, black: g.black, start: state.review.start };
+  }
+  const h = headers();
+  return {
+    pgn: currentPgn(), file: pgnName(h.White, h.Black, store.get('current', {}).started || new Date().toISOString(), h.Event),
+    moves: state.game.history({ verbose: true }), white: h.White, black: h.Black,
+  };
+}
+
+async function exportPng() {
+  closeMenu();
+  const v = viewedGameInfo();
+  const g = viewGame();
+  const ply = state.review ? state.review.ply : v.moves.length;
+  const last = v.moves[ply - 1];
+  const caption = `${v.white} vs ${v.black}${last ? `, ${Math.ceil(ply / 2)}${ply % 2 ? '.' : '…'} ${last.san}` : ''}`;
+  const blob = await pngBlob(g.board(), { flipped: state.flipped, marks: last ? [last.from, last.to] : [], caption });
+  download(blob, v.file.replace(/\.pgn$/, `_move${ply}.png`));
+  setStatus('Board image saved to Downloads.', 'ok');
+}
+
+async function exportGif() {
+  closeMenu();
+  const v = viewedGameInfo();
+  if (!v.moves.length) { setStatus('Play a few moves first.', 'idle'); return; }
+  const g = v.start ? new Chess(v.start) : new Chess(v.moves[0].before);
+  const frames = [{ board: g.board(), marks: [], caption: `${v.white} vs ${v.black}` }];
+  v.moves.forEach((m, i) => {
+    g.move(m.san);
+    frames.push({ board: g.board(), marks: [m.from, m.to], caption: `${Math.ceil((i + 1) / 2)}${i % 2 ? '…' : '.'} ${m.san}` });
+  });
+  const blob = await gifBlob(frames, {
+    flipped: state.flipped,
+    onProgress: (i, n) => setStatus(`Making the animation… ${Math.round((i / n) * 100)}%`, 'busy'),
+  });
+  download(blob, v.file.replace(/\.pgn$/, '.gif'));
+  setStatus('Game animation saved to Downloads.', 'ok');
+}
+
+function download(data, name) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-chess-pgn' }));
+  a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: 'application/x-chess-pgn' }));
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -749,7 +888,7 @@ function renderBoard() {
       if (p) {
         let extra = '';
         if (p.type === 'k' && g.isCheckmate()) extra = p.color === g.turn() ? ' mated' : ' victor';
-        sq.innerHTML = `<span class="pc ${p.color}${extra}">${GLYPH[p.type]}</span>`;
+        sq.innerHTML = `<span class="pc ${p.color}${p.type.toUpperCase()}${extra}" role="img" aria-label="${p.color === 'w' ? 'White' : 'Black'} ${PIECE_NAME[p.type]}"></span>`;
       }
       if (vr === 7) sq.insertAdjacentHTML('beforeend', `<span class="coord file">${'abcdefgh'[file]}</span>`);
       if (vf === 0) sq.insertAdjacentHTML('beforeend', `<span class="coord rank">${rank + 1}</span>`);
@@ -790,6 +929,8 @@ function renderMoves() {
       if (j >= hist.length) break;
       const s = document.createElement('span');
       s.textContent = hist[j];
+      const jm = rv?.judged?.[j];
+      if (jm?.mark) s.insertAdjacentHTML('beforeend', `<span class="mk mk-${jm.label}" title="${jm.label}">${jm.mark}</span>`);
       if (j === current) s.className = 'last';
       if (rv) { s.classList.add('jump'); s.onclick = () => reviewGoto(j + 1); }
       li.appendChild(s);
@@ -930,6 +1071,7 @@ function openReview(g) {
   $('reviewTitle').textContent = `${savedTitle(g)}, ${g.inProgress ? 'in progress' : g.result === '*' ? 'unfinished' : g.result}`;
   reviewGoto(moves.length);
   setStatus('Reviewing a saved game. Use the arrow keys to step through it.', 'idle');
+  analyseReview();
 }
 
 function reviewGoto(ply) {
@@ -949,10 +1091,95 @@ function reviewGoto(ply) {
   $('rvNext').disabled = $('rvLast').disabled = ply === rv.moves.length;
   renderBoard();
   renderMoves();
+  renderInfo();
+  renderEval();
+}
+
+// ───────────────────────────────────────── Stockfish review
+
+function endFen(fen) {
+  const g = new Chess(fen);
+  if (g.isCheckmate()) return g.turn() === 'w' ? { over: -1, text: '0-1' } : { over: 1, text: '1-0' };
+  if (g.isGameOver()) return { over: 0, text: '½-½' };
+  return null;
+}
+
+/** Evaluate every position of the reviewed game (cached with the saved game), marking mistakes as it goes. */
+async function analyseReview() {
+  const rv = state.review;
+  if (!rv || !rv.moves.length) return;
+  const g = rv.meta;
+  const fens = [rv.start || rv.moves[0].before, ...rv.moves.map((m) => m.after)];
+  if (g.analysis?.evals?.length === fens.length) {
+    rv.evals = g.analysis.evals;
+    finishAnalysis(rv);
+    return;
+  }
+  const token = ++state.anaToken;
+  try {
+    state.engine ??= new Engine();
+  } catch {
+    $('analysisLine').textContent = 'The analysis engine could not start in this browser.';
+    return;
+  }
+  rv.evals = [];
+  for (let i = 0; i < fens.length; i++) {
+    if (token !== state.anaToken) return; // the review was closed or another game opened
+    $('analysisLine').textContent = `Stockfish is analysing: position ${i + 1} of ${fens.length}`;
+    rv.evals.push(endFen(fens[i]) || await state.engine.analyse(fens[i]));
+    rv.judged = judgeMoves(rv.evals);
+    if (i === rv.ply || i === rv.ply - 1) renderEval();
+    if (i % 4 === 0) renderMoves();
+  }
+  if (token !== state.anaToken) return;
+  // keep the result with the saved game so it opens instantly next time
+  const games = store.get('games', []);
+  const saved = games.find((x) => x.id === g.id);
+  if (saved) { saved.analysis = { engine: 'Stockfish 19 lite', evals: rv.evals }; store.set('games', games); g.analysis = saved.analysis; }
+  finishAnalysis(rv);
+}
+
+function finishAnalysis(rv) {
+  rv.judged = judgeMoves(rv.evals);
+  const s = reviewSummary(rv.judged);
+  const side = (x) => [x.blunders && `${x.blunders} blunder${x.blunders > 1 ? 's' : ''}`,
+    x.mistakes && `${x.mistakes} mistake${x.mistakes > 1 ? 's' : ''}`,
+    x.inaccuracies && `${x.inaccuracies} inaccurac${x.inaccuracies > 1 ? 'ies' : 'y'}`].filter(Boolean).join(', ') || 'no mistakes';
+  $('analysisLine').textContent =
+    `Accuracy: White ${s.w.accuracy ?? '–'}%, Black ${s.b.accuracy ?? '–'}%. White: ${side(s.w)}. Black: ${side(s.b)}.`;
+  renderMoves();
+  renderEval();
+}
+
+/** Evaluation bar and the engine's best move for the position on screen. */
+function renderEval() {
+  const rv = state.review;
+  const bar = $('evalbar'), arrow = $('bestArrow');
+  const ev = rv?.evals?.[rv.ply];
+  arrow.style.display = 'none';
+  bar.classList.toggle('flipped', state.flipped);
+  if (!ev) { bar.querySelector('.evalfill').style.height = '50%'; bar.querySelector('.evaltext').textContent = ''; return; }
+  const pct = ev.over != null ? 50 + 50 * ev.over : winPercent(ev);
+  bar.querySelector('.evalfill').style.height = `${pct}%`;
+  bar.querySelector('.evaltext').textContent = ev.text || formatEval(ev);
+  bar.classList.toggle('black-ahead', pct < 50);
+  if (ev.best) {
+    const xy = (sq) => {
+      const f = sq.charCodeAt(0) - 97, r = +sq[1] - 1;
+      return state.flipped ? [7 - f + 0.5, r + 0.5] : [f + 0.5, 7 - r + 0.5];
+    };
+    const [x1, y1] = xy(ev.best.slice(0, 2)), [x2, y2] = xy(ev.best.slice(2, 4));
+    const k = 0.28 / Math.hypot(x2 - x1, y2 - y1); // stop short of the target square's centre
+    Object.entries({ x1, y1, x2: x2 - (x2 - x1) * k, y2: y2 - (y2 - y1) * k }).forEach(([a, v]) => arrow.setAttribute(a, v));
+    arrow.style.display = '';
+  }
 }
 
 function exitReview() {
   if (!state.review) return;
+  state.anaToken++;
+  state.engine?.stop();
+  $('bestArrow').style.display = 'none';
   state.review = null;
   document.body.classList.remove('reviewing');
   const cur = store.get('current', {});
@@ -962,7 +1189,64 @@ function exitReview() {
   setStatus('Back to the live game.', 'ok');
 }
 
-function renderGame() { renderBoard(); renderMoves(); updateButtons(); }
+function renderGame() { renderBoard(); renderMoves(); renderInfo(); updateButtons(); }
+
+// ───────────────────────────────────────── opening, material, clock, speech
+
+let OPENINGS = null;
+fetch('vendor/openings.json').then((r) => r.json()).then((t) => { OPENINGS = t; renderInfo(); }).catch(() => {});
+
+/** Positions after each move of whatever is on screen (the live game, or a reviewed game up to the current move). */
+function viewFens() {
+  return state.review
+    ? state.review.moves.slice(0, state.review.ply).map((m) => m.after)
+    : state.game.history({ verbose: true }).map((m) => m.after);
+}
+
+function renderInfo() {
+  const g = viewGame();
+  const m = material(g.board());
+  for (const [side, el] of [['w', $('capW')], ['b', $('capB')]]) {
+    const theirs = side === 'w' ? 'b' : 'w';
+    const lead = side === 'w' ? m.diff : -m.diff;
+    el.innerHTML = m.capturedBy[side].map((t) => `<i class="cap ${theirs}${t.toUpperCase()}"></i>`).join('') +
+      (lead > 0 ? `<span class="diff">+${lead}</span>` : '');
+  }
+  const o = OPENINGS && openingFor(viewFens(), OPENINGS);
+  $('opening').innerHTML = o ? `<b>${o.eco}</b>${o.name.replace(/[<>&]/g, '')}` : '';
+  renderClocks();
+}
+
+/** On-screen chess clock, driven by the recorded move times (only when a time control is set). */
+function renderClocks() {
+  const tc = parseTimeControl(settings.timeControl);
+  const show = !!tc && !state.review;
+  $('clockW').hidden = $('clockB').hidden = !show;
+  if (!show) return;
+  const over = state.game.isGameOver();
+  const now = over ? (state.meta.at(-1)?.at ?? Date.now()) : Date.now();
+  const c = clockState(state.meta, tc, state.game.turn(), now, state.clockStart);
+  for (const [side, el] of [['w', $('clockW')], ['b', $('clockB')]]) {
+    const ms = c[side];
+    el.textContent = ms >= 3600_000 ? formatClock(ms) : formatClock(ms).slice(2);
+    el.classList.toggle('running', c.running === side && !over);
+    el.classList.toggle('low', ms < 20_000);
+  }
+  const flagged = ['w', 'b'].find((side) => c[side] === 0);
+  if (flagged && !over && state.flagged !== flagged) {
+    state.flagged = flagged;
+    setStatus(`${PLAYER(flagged)} has run out of time.`, 'warn');
+  }
+}
+setInterval(() => { if (!document.hidden) renderClocks(); }, 250);
+
+function speak(text) {
+  if (!settings.speak || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.05;
+  speechSynthesis.speak(u);
+}
 
 function updateSavedGame(id, fields) {
   const games = store.get('games', []);
@@ -1100,18 +1384,48 @@ function setTracking(on) {
 }
 
 // draw camera previews with overlays
+/** Normalised video coordinates -> canvas pixels, allowing for the zoomed view. */
+function toCanvas(cam, u, v) {
+  const { x, y, w, h } = cam.view;
+  return [((u - x) / w) * cam.canvas.width, ((v - y) / h) * cam.canvas.height];
+}
+
 function boardToCanvas(cam, x, y) {
   const [u, v] = applyH(cam.sampler.Hb2i, x, y);
-  return [u * cam.canvas.width, v * cam.canvas.height];
+  return toCanvas(cam, u, v);
+}
+
+/** A round magnifier showing the video around the pointer, for placing corners precisely. */
+function drawMagnifier(cam) {
+  const { ctx, canvas, video, hover } = cam;
+  if (!hover || (!cam.calibrating && !cam.adjusting) || video.readyState < 2) return;
+  const R = Math.round(Math.min(canvas.width, canvas.height) * 0.16), zoom = 4;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const [px, py] = toCanvas(cam, hover[0], hover[1]);
+  // keep the lens away from the pointer
+  const cx = px > canvas.width / 2 ? R + 12 : canvas.width - R - 12, cy = R + 44;
+  const srcW = (2 * R / canvas.width) * cam.view.w * vw / zoom, srcH = (2 * R / canvas.height) * cam.view.h * vh / zoom;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.closePath();
+  ctx.fillStyle = '#000'; ctx.fill(); ctx.clip();
+  ctx.drawImage(video, hover[0] * vw - srcW / 2, hover[1] * vh - srcH / 2, srcW, srcH, cx - R, cy - R, 2 * R, 2 * R);
+  ctx.strokeStyle = '#ff4d3a'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2; ctx.stroke();
 }
 
 function drawCams() {
   for (const cam of state.cams) {
     const { ctx, canvas, video } = cam;
-    if (video.readyState >= 2) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (video.readyState >= 2) {
+      const { x, y, w, h } = cam.view, vw = video.videoWidth, vh = video.videoHeight;
+      ctx.drawImage(video, x * vw, y * vh, w * vw, h * vh, 0, 0, canvas.width, canvas.height);
+    }
 
     if (cam.sampler && !cam.calibrating) {
-      if (settings.heatmap && cam.scores) {
+      if (settings.heatmap && cam.scores && !cam.adjusting) {
         for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
           const s = cam.scores[squareIndex(f, r)];
           if (s < 0.05) continue;
@@ -1137,12 +1451,15 @@ function drawCams() {
       label(ctx, 'a1', lx, ly);
     }
 
-    cam.corners.forEach(([x, y], i) => {
-      const px = x * canvas.width, py = y * canvas.height;
-      ctx.fillStyle = '#ff4d3a';
-      ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
-      label(ctx, CORNER_ORDER[i], px + 10, py - 10);
-    });
+    if (cam.calibrating || cam.adjusting) {
+      cam.corners.forEach(([x, y], i) => {
+        const [px, py] = toCanvas(cam, x, y);
+        ctx.fillStyle = cam.drag === i ? '#ffd166' : '#ff4d3a';
+        ctx.beginPath(); ctx.arc(px, py, cam.adjusting ? 8 : 6, 0, Math.PI * 2); ctx.fill();
+        label(ctx, CORNER_ORDER[i], px + 10, py - 10);
+      });
+      drawMagnifier(cam);
+    }
 
     if (state.tracking && cam.sampler) {
       label(ctx, state.moving ? 'hand in view' : 'still', 12, canvas.height - 14, state.moving ? '#ffcc4d' : '#7dff9a');
@@ -1198,6 +1515,8 @@ function bindSettings() {
     $('sound').checked = settings.sound;
     $('heatmap').checked = settings.heatmap;
     $('dataset').checked = settings.dataset;
+    $('zoom').checked = settings.zoom;
+    $('speak').checked = settings.speak;
     $('timeControl').value = settings.timeControl;
   };
   for (const [id, out, fmt] of fields) {
@@ -1207,7 +1526,7 @@ function bindSettings() {
       store.set('settings', settings);
     });
   }
-  for (const id of ['sound', 'heatmap', 'dataset']) {
+  for (const id of ['sound', 'heatmap', 'dataset', 'zoom', 'speak']) {
     $(id).addEventListener('change', () => { settings[id] = $(id).checked; store.set('settings', settings); });
   }
   $('timeControl').addEventListener('change', () => {
@@ -1217,6 +1536,7 @@ function bindSettings() {
     store.set('settings', settings);
     saveCurrent(); // rewrite the game file with clock times
   });
+  $('zoom').addEventListener('change', () => state.cams.forEach(updateView));
   $('btnExportAccuracy').onclick = () => download(accuracyCsv(store.get('games', [])), 'accuracy.csv');
     $('btnResetSettings').onclick = () => { Object.assign(settings, DEFAULTS); store.set('settings', settings); sync(); };
   sync();
@@ -1239,14 +1559,23 @@ function init() {
   $('btnTrack').onclick = () => setTracking(!state.tracking);
   $('btnUndo').onclick = undoMove;
   $('btnBaseline').onclick = rebaseline;
-  $('btnFlip').onclick = () => { state.flipped = !state.flipped; store.set('flipped', state.flipped); renderBoard(); };
-  $('btnDownload').onclick = () => {
-    const h = headers();
-    download(currentPgn(), pgnName(h.White, h.Black, store.get('current', {}).started || new Date().toISOString(), h.Event));
-  };
+  $('btnFlip').onclick = () => { state.flipped = !state.flipped; store.set('flipped', state.flipped); renderBoard(); renderEval(); };
+  $('btnDownload').onclick = () => { closeMenu(); const v = viewedGameInfo(); download(v.pgn, v.file); };
   $('btnCopy').onclick = async () => {
-    try { await navigator.clipboard.writeText(currentPgn()); setStatus('PGN copied.', 'ok'); }
+    closeMenu();
+    try { await navigator.clipboard.writeText(viewedGameInfo().pgn); setStatus('PGN copied.', 'ok'); }
     catch { setStatus('Could not copy; use Download PGN instead.', 'warn'); }
+  };
+  $('btnExport').onclick = (e) => { e.stopPropagation(); $('exportMenu').hidden ? openMenu() : closeMenu(); };
+  document.addEventListener('click', (e) => { if (!e.target.closest('.menu-wrap')) closeMenu(); });
+  $('btnPng').onclick = exportPng;
+  $('btnGif').onclick = exportGif;
+  $('btnLichess').onclick = async () => {
+    const v = viewedGameInfo();
+    if (!v.moves.length) { setStatus('Play a few moves first.', 'idle'); return; }
+    setStatus('Sending the game to Lichess…', 'busy');
+    const how = await openInLichess(v.pgn);
+    setStatus(how === 'opened' ? 'Opened on Lichess for analysis.' : 'Lichess did not answer, so the PGN was copied. Paste it into the page that opened.', how === 'opened' ? 'ok' : 'busy');
   };
   $('btnSaveGame').onclick = saveAndNewGame;
   $('btnFolder').onclick = chooseFolder;
@@ -1291,6 +1620,14 @@ function init() {
   $('scrim').onclick = closeDrawer;
   for (const b of document.querySelectorAll('.tabs [data-tab]')) b.onclick = () => selectTab(b.dataset.tab);
 
+  // Installable app that also opens offline.
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  let installEvent = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; $('btnInstall').hidden = false; });
+  window.addEventListener('appinstalled', () => { $('btnInstall').hidden = true; setStatus('Installed. Open Chess Cam Tracker from your desktop or Start menu.', 'ok'); });
+  $('btnInstall').onclick = async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice; installEvent = null; $('btnInstall').hidden = true; };
   listCameras(false).catch(() => {});
   if (!state.cams.length) setTimeout(() => openDrawer('cameras'), 300);
   navigator.mediaDevices?.addEventListener?.('devicechange', () => listCameras(false).catch(() => {}));

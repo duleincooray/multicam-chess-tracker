@@ -8,6 +8,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#5b3720">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/style.css">
   <script type="importmap">
     { "imports": { "chess.js": "./vendor/chess.js" } }
@@ -26,6 +30,10 @@
       <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-last" viewBox="0 0 24 24"><path d="M18 5v14M6 6l8 6-8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-analyse" viewBox="0 0 24 24"><path d="M4 19h16M7 15l3.5-4 3 2.5L18 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="8" r="1.6" fill="currentColor"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 16l5-5 4 4 2-2 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="i-film" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 9.5v5l4-2.5z" fill="currentColor"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
@@ -36,6 +44,7 @@
     <div class="brand"><span class="knight" aria-hidden="true">♞</span>Chess Cam Tracker</div>
     <div id="status" class="status idle" role="status" aria-live="polite">Set up your cameras to begin.</div>
     <div class="bar-actions">
+      <button id="btnInstall" class="ghost install" hidden>Install app</button>
       <span id="live" class="live" hidden>Live</span>
       <button id="btnSettings" class="icon" title="Setup (S)" aria-label="Open setup"><svg><use href="#i-gear"/></svg></button>
     </div>
@@ -51,8 +60,14 @@
     </section>
 
     <section class="center" aria-label="Board">
+      <div class="board-row">
+      <div id="evalbar" class="evalbar" aria-hidden="true"><div class="evalfill"></div><span class="evaltext"></span></div>
       <div class="board-frame">
         <div id="board" class="board" aria-label="Current position"></div>
+        <svg id="arrows" class="arrows" viewBox="0 0 8 8" aria-hidden="true">
+          <defs><marker id="ah" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor"/></marker></defs>
+          <line id="bestArrow" x1="0" y1="0" x2="0" y2="0" marker-end="url(#ah)" style="display:none"/>
+        </svg>
         <div id="result" class="result" hidden role="dialog" aria-labelledby="resultKind">
           <div class="result-card">
             <p id="resultKind" class="result-kind">Checkmate</p>
@@ -64,6 +79,7 @@
             </div>
           </div>
         </div>
+      </div>
       </div>
       <div class="dock">
         <button id="btnTrack" class="dock-main" disabled title="Start or pause tracking (Space)">
@@ -86,20 +102,35 @@
 
     <aside class="sheet" aria-label="Score sheet">
       <p id="reviewTitle" class="review-title"></p>
-      <div class="players">
-        <input id="white" placeholder="White" aria-label="White player">
-        <span class="vs">vs</span>
+      <div class="player" id="rowB">
         <input id="black" placeholder="Black" aria-label="Black player">
+        <span id="clockB" class="clock" hidden></span>
+        <div id="capB" class="caps" aria-label="Pieces Black has captured"></div>
       </div>
+      <p id="opening" class="opening"></p>
       <ol id="moves" class="moves"></ol>
+      <div class="player" id="rowW">
+        <input id="white" placeholder="White" aria-label="White player">
+        <span id="clockW" class="clock" hidden></span>
+        <div id="capW" class="caps" aria-label="Pieces White has captured"></div>
+      </div>
       <form id="manualForm" class="manual">
         <input id="manualMove" placeholder="Type a missed move" autocomplete="off" aria-label="Manual move">
       </form>
       <div class="sheet-actions">
         <button id="btnSaveGame" class="primary" title="Every game is saved automatically. This starts a fresh one.">New game</button>
-        <button id="btnDownload" class="icon" title="Download PGN" aria-label="Download PGN"><svg><use href="#i-down"/></svg></button>
-        <button id="btnCopy" class="icon" title="Copy PGN" aria-label="Copy PGN"><svg><use href="#i-copy"/></svg></button>
+        <button id="btnLichess" class="icon" title="Analyse on Lichess" aria-label="Analyse on Lichess"><svg><use href="#i-analyse"/></svg></button>
+        <div class="menu-wrap">
+          <button id="btnExport" class="icon" title="Save or share" aria-label="Save or share" aria-haspopup="true" aria-expanded="false"><svg><use href="#i-share"/></svg></button>
+          <div id="exportMenu" class="menu" role="menu" hidden>
+            <button id="btnDownload" role="menuitem"><svg><use href="#i-down"/></svg>Download PGN</button>
+            <button id="btnCopy" role="menuitem"><svg><use href="#i-copy"/></svg>Copy PGN</button>
+            <button id="btnPng" role="menuitem"><svg><use href="#i-image"/></svg>Board image</button>
+            <button id="btnGif" role="menuitem"><svg><use href="#i-film"/></svg>Game animation (GIF)</button>
+          </div>
+        </div>
       </div>
+      <p id="analysisLine" class="analysis-line"></p>
       <p id="gameStats" class="folder-line"></p>
       <p id="folderLine" class="folder-line"></p>
     </aside>
@@ -133,6 +164,7 @@
           <button id="btnRefreshCams" class="ghost">Refresh list</button>
         </div>
         <p class="note">Then press Calibrate on each camera and click the board's outer corners in the order a1, h1, h8, a8.</p>
+        <label class="check"><input id="zoom" type="checkbox"> Zoom the camera view to the board</label>
         <label>Event <input id="event" placeholder="Casual game"></label>
         <label>Time control (optional) <input id="timeControl" placeholder="e.g. 10+5 for 10 minutes, 5 seconds a move" autocomplete="off"></label>
         <label>Promote pawns to
@@ -157,6 +189,7 @@
           <input id="motionT" type="range" min="0.001" max="0.03" step="0.001">
         </label>
         <label class="check"><input id="sound" type="checkbox"> Beep when a move is recorded</label>
+        <label class="check"><input id="speak" type="checkbox"> Read each move aloud</label>
         <label class="check"><input id="heatmap" type="checkbox"> Show what each camera sees changing</label>
         <button id="btnResetSettings" class="ghost">Reset to defaults</button>
       </section>
@@ -189,6 +222,7 @@
         <span class="cam-state"></span>
         <span class="cam-actions">
           <button class="btn-undo-point chip" hidden>Undo point</button>
+          <button class="btn-adjust chip" hidden>Adjust corners</button>
           <button class="btn-calibrate chip">Calibrate</button>
         </span>
       </div>

@@ -6,11 +6,25 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Drawn chess pieces (cburnett set) instead of text symbols, on the board and in exports.
+- The camera view zooms to the board after calibration (can be turned off in Setup).
+- Score sheet shows each player with captured pieces, material lead and clock; the opening name sits above the moves.
+- Download and copy PGN moved into a Save or share menu.
+- GitHub Actions updated to current versions.
 - New single-screen layout with no page scrolling: cameras, board and score sheet side by side; setup, detection settings and saved games moved into a slide-out panel (gear button or S).
 - Pieces slide to their new square when a move is recorded; status, move list and panels animate in. Animations are off when the system asks for reduced motion.
 - A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
 
 ### Added
+- Adjust corners: drag calibration corners into place, with a magnifier, instead of re-clicking all four.
+- Opening names (Lichess chess-openings list, CC0).
+- Captured pieces and material balance.
+- On-screen chess clock driven by the detected moves when a time control is set; flags when time runs out.
+- Read each move aloud (optional).
+- Stockfish review of saved games: evaluation bar, best-move arrow, ?? / ? / ?! marks and accuracy per player, saved with the game.
+- Analyse on Lichess button.
+- Board image (PNG) and whole-game animation (GIF) export.
+- Install as an app, with offline support.
 - Dataset: with a games folder connected, a photo from each camera is saved at every move into games/<date-time>/cam-X/ply-NNN.jpg, labelled with the exact position in labels.json and labels.csv (with camera calibration). Photos of undone or corrected moves are removed.
 - Detection log: every move records its source (auto, weak, corrected, choice, manual), confidence and time; undos and self-corrections are logged. Setup, Games shows the share of moves recorded without help across games; per-game log.json and an accuracy.csv export.
 - Move times in the PGN as [%emt], plus [%clk] clock times when a time control such as 10+5 is set.

@@ -19,6 +19,23 @@ It runs entirely in your browser: no install, no server, and no video leaves you
 - If it's unsure, it asks you to pick between the likely moves, and you can always **type a
   missed move** or **undo**.
 
+## Also included
+
+- **Drawn pieces, opening names and material**: the board shows the opening being played (from the Lichess openings list),
+  the pieces each side has captured and who is ahead.
+- **Chess clock**: set a time control such as `10+5` in Setup and both clocks run on screen, switching sides when a
+  move is detected. The same times go into the PGN.
+- **Read moves aloud** (Setup, Detection), so you know a move was recorded without looking.
+- **Zoomed camera view and corner adjustment**: after calibration the camera view zooms to the board. Press
+  **Adjust corners** to drag the corner dots, with a magnifier for precise placement.
+- **Review with Stockfish**: open a saved game and Stockfish (running in your browser) checks every move. You get an
+  evaluation bar, the engine's best move as an arrow, blunders (??), mistakes (?) and inaccuracies (?!) in the move list,
+  and an accuracy score for each player. The analysis is saved with the game.
+- **Analyse on Lichess**: one button imports the game into Lichess for its own analysis.
+- **Share**: download the PGN, copy it, save a picture of the board, or make an animated GIF of the whole game.
+- **Install as an app**: Chrome and Edge show an **Install app** button; the installed app has its own window and
+  opens without internet.
+
 ## Quick start
 
 1. Open the app in **Chrome or Edge** (Firefox works too). Camera access needs `https://` or `localhost`.
@@ -88,7 +105,12 @@ webcam frame ──► sample each square ──► compare with last position �
 - `js/research.js` — move times, accuracy summary and dataset labels.
 - `js/folder.js` — writes games, photos and labels into the folder you choose.
 - `js/storage.js` — safe `localStorage` wrapper (settings, calibrations, games).
-- `vendor/chess.js` — bundled copy of chess.js so the app works offline. Update with `npm run vendor`.
+- `js/boardinfo.js`, `js/openings.js` — material count, spoken moves, opening names.
+- `js/engine.js`, `js/analysis.js` — Stockfish in a background worker, and the review scoring (Lichess's published formulas).
+- `js/share.js` — board images, GIFs and the Lichess import.
+- `sw.js`, `manifest.webmanifest`, `icons/` — install as an app and work offline.
+- `vendor/` — bundled chess.js, piece set, Stockfish, openings list and GIF encoder, so nothing loads from other sites.
+  See [THIRD_PARTY.md](THIRD_PARTY.md) for their licences. Update chess.js with `npm run vendor`.
 
 ## Research data
 
@@ -174,4 +196,4 @@ most useful.
 
 ## Licence
 
-MIT. chess.js is BSD-2-Clause (see `vendor/chess.js.LICENSE`).
+MIT for this project's code. Bundled components keep their own licences, listed in [THIRD_PARTY.md](THIRD_PARTY.md) (Stockfish and the piece set are GPL).
