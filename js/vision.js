@@ -111,28 +111,50 @@ export function sampleFrame(data, sampler) {
   return out;
 }
 
-function changed(a, b, k, pixT) {
+/**
+ * Per-channel gains that map cur's overall colour onto ref's. This undoes webcam
+ * auto-exposure and white-balance drift (e.g. when an arm enters the frame), which
+ * would otherwise make every square look changed. A real move only touches 2-4 of
+ * the 64 squares, so it barely moves the averages.
+ */
+export function channelGains(ref, cur) {
+  const sr = [0, 0, 0], sc = [0, 0, 0];
+  for (let i = 0; i < ref.length; i += 3) {
+    for (let c = 0; c < 3; c++) { sr[c] += ref[i + c]; sc[c] += cur[i + c]; }
+  }
+  return sr.map((v, c) => (sc[c] > 0 ? Math.min(2, Math.max(0.5, v / sc[c])) : 1));
+}
+
+const NO_GAIN = [1, 1, 1];
+
+function changed(a, b, k, pixT, g) {
   const i = k * 3;
-  return Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2])) > pixT;
+  return Math.max(
+    Math.abs(a[i] - b[i] * g[0]),
+    Math.abs(a[i + 1] - b[i + 1] * g[1]),
+    Math.abs(a[i + 2] - b[i + 2] * g[2]),
+  ) > pixT;
 }
 
 /** Fraction of sample points that changed, per square (Float32Array of 64). */
-export function squareScores(ref, cur, per, pixT = 30) {
+export function squareScores(ref, cur, per, pixT = 30, compensate = true) {
+  const g = compensate ? channelGains(ref, cur) : NO_GAIN;
   const scores = new Float32Array(64);
   for (let sq = 0; sq < 64; sq++) {
     let c = 0;
-    for (let s = 0; s < per; s++) if (changed(ref, cur, sq * per + s, pixT)) c++;
+    for (let s = 0; s < per; s++) if (changed(ref, cur, sq * per + s, pixT, g)) c++;
     scores[sq] = c / per;
   }
   return scores;
 }
 
 /** Fraction of all sample points that changed between two frames. */
-export function motionFraction(prev, cur, pixT = 30) {
+export function motionFraction(prev, cur, pixT = 30, compensate = true) {
   if (!prev) return 1;
+  const g = compensate ? channelGains(prev, cur) : NO_GAIN;
   const n = cur.length / 3;
   let c = 0;
-  for (let k = 0; k < n; k++) if (changed(prev, cur, k, pixT)) c++;
+  for (let k = 0; k < n; k++) if (changed(prev, cur, k, pixT, g)) c++;
   return c / n;
 }
 

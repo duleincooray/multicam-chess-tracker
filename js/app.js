@@ -7,7 +7,7 @@ import { inferMove, touchedSquares, buildPgn, sqIndex } from './tracker.js';
 import * as store from './storage.js';
 
 const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false };
-const WORK_W = 640;     // width of the image the detector analyses
+const WORK_W_MAX = 960; // max width of the image the detector analyses (more detail on far squares)
 const TICK_MS = 100;    // detector runs ~10 times a second
 const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
 
@@ -138,8 +138,8 @@ async function addCamera(key, deviceId, stream) {
   canvas.height = Math.round(vh * scale);
 
   const work = document.createElement('canvas');
-  work.width = WORK_W;
-  work.height = Math.round((WORK_W * vh) / vw);
+  work.width = Math.min(WORK_W_MAX, vw);
+  work.height = Math.round((work.width * vh) / vw);
   const wctx = work.getContext('2d', { willReadFrequently: true });
 
   const label = stream.getVideoTracks()[0]?.label || `Camera ${key}`;
@@ -148,7 +148,7 @@ async function addCamera(key, deviceId, stream) {
     corners: [], calibrating: false, sampler: null, prev: null, cur: null, ref: null, motion: 1, scores: null,
   };
   el.querySelector('.cam-title').textContent = `Camera ${key}`;
-  el.querySelector('.cam-state').textContent = label;
+  el.querySelector('.cam-state').textContent = `${label} · ${vw}×${vh}`;
 
   const savedCorners = store.get('calib', {})[deviceId];
   if (savedCorners?.length === 4) applyCorners(cam, savedCorners);
@@ -265,6 +265,10 @@ function analyse(ready) {
     state.marks = { squares: r.changed, kind: 'warn' };
     showChoice(r.candidates);
     setStatus('Not sure which move that was. Pick it below or type it.', 'busy');
+  } else if (r.status === 'covered') {
+    state.marks = { squares: [], kind: 'ok' };
+    setStatus(`Something is covering the board (${r.changed.length} squares changed). ` +
+      'Move hands, arms and shadows out of view. If the lighting changed, press B to re-baseline.', 'busy');
   } else if (r.status === 'nofit') {
     state.marks = { squares: r.changed, kind: 'warn' };
     setStatus(`Change on ${r.changed.join(', ')}, but no legal move fits. Fix the board, re-baseline or type the move.`, 'warn');
@@ -600,6 +604,9 @@ function init() {
 
   $('btnCameras').onclick = startCameras;
   for (const id of ['camA', 'camB']) $(id).addEventListener('change', saveCamChoice);
+  const savedRes = store.get('resolution', null);
+  if (savedRes && [...$('resolution').options].some((o) => o.value === savedRes)) $('resolution').value = savedRes;
+  $('resolution').addEventListener('change', () => store.set('resolution', $('resolution').value));
   $('btnRefreshCams').onclick = () => listCameras(true).catch((e) => setStatus(e.message, 'warn'));
   $('btnTrack').onclick = () => setTracking(!state.tracking);
   $('btnUndo').onclick = undoMove;

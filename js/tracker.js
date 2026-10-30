@@ -34,14 +34,17 @@ export function touchedSquares(move) {
  *   { status: 'move', move, squares, score }              confident match
  *   { status: 'ambiguous', candidates: [move, move] }     two moves fit about equally
  *   { status: 'nofit', changed: [square names] }          change seen, no legal move fits
+ *   { status: 'covered', changed: [square names] }        too many squares changed: a hand,
+ *                                                         arm or shadow is probably on the board
  */
 export function inferMove(game, scores, opts = {}) {
-  const { onT = 0.25, promotion = 'q', margin = 0.05 } = opts;
+  const { onT = 0.25, promotion = 'q', margin = 0.05, maxChanged = 8 } = opts;
   const lowT = opts.lowT ?? onT * 0.5;
 
   const changedIdx = [];
   for (let i = 0; i < 64; i++) if (scores[i] >= onT) changedIdx.push(i);
   if (!changedIdx.length) return { status: 'none' };
+  if (changedIdx.length > maxChanged) return { status: 'covered', changed: changedIdx.map(sqName) };
 
   const ranked = [];
   for (const mv of game.moves({ verbose: true })) {

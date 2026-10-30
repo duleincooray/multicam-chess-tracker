@@ -5,6 +5,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- 1920 × 1080 and 2560 × 1440 camera resolutions; the detector now analyses up to 960 px wide for more detail on far squares.
+- The camera card shows the resolution the camera actually delivers.
+- Compensation for webcam auto-exposure and white-balance drift, so a brightness change no longer looks like moved pieces.
+- "Board covered" status when a hand, arm or shadow changes many squares at once, instead of an error.
+
 ### Fixed
 - Starting cameras no longer replaces the cameras you picked with the previous choice (it kept opening the built-in camera).
 - Setup panels no longer overlap when camera names are long.

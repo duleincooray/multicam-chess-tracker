@@ -87,3 +87,16 @@ function scoresSanity() {
   const s = combineScores([new Float32Array(64).fill(1), new Float32Array(64)]);
   return s[sqIndex('e4')] === 0.5;
 }
+
+test('overall brightness change (webcam auto-exposure) is not seen as a change', () => {
+  const corners = [[0.15, 0.95], [0.85, 0.95], [0.7, 0.25], [0.3, 0.25]];
+  const smp = buildSampler(corners, W, H);
+  const g = new Chess();
+  const ref = sampleFrame(render(g, corners), smp);
+  const darker = ref.map((v) => Math.round(v * 0.75));
+  const raw = squareScores(ref, darker, smp.per, 30, false);
+  const fixed = squareScores(ref, darker, smp.per, 30, true);
+  assert.ok(raw.filter((v) => v > 0.25).length > 8, 'without compensation many squares look changed');
+  assert.ok(fixed.every((v) => v < 0.25), 'with compensation nothing should look changed');
+  assert.ok(motionFraction(ref, darker) < 0.004, 'exposure drift should not count as motion');
+});

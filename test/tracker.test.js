@@ -84,3 +84,11 @@ test('PGN gets headers and result', () => {
   assert.match(pgn, /\[Result "0-1"\]/);
   assert.match(pgn, /Qh4# 0-1/);
 });
+
+test('a hand or shadow over many squares is reported as covered, not as a move', () => {
+  const map = {};
+  for (const sq of ['a1', 'a2', 'b2', 'e2', 'b3', 'c3', 'e3', 'c4', 'd4', 'f4']) map[sq] = 0.7;
+  const r = inferMove(new Chess(), scoresFor(map));
+  assert.equal(r.status, 'covered');
+  assert.equal(r.changed.length, 10);
+});
