@@ -32,8 +32,36 @@ const state = {
 
 function setStatus(text, kind = 'idle') {
   const el = $('status');
+  if (el.textContent === text && el.classList.contains(kind)) return;
   el.textContent = text;
+  el.title = text;
   el.className = `status ${kind}`;
+  void el.offsetWidth; // restart the entrance animation
+  el.classList.add('flash');
+}
+
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ───────────────────────────────────────── setup drawer
+
+function openDrawer(tab) {
+  if (tab) selectTab(tab);
+  $('drawer').classList.add('open');
+  $('drawer').setAttribute('aria-hidden', 'false');
+  $('scrim').hidden = false;
+  requestAnimationFrame(() => $('scrim').classList.add('open'));
+}
+
+function closeDrawer() {
+  $('drawer').classList.remove('open');
+  $('drawer').setAttribute('aria-hidden', 'true');
+  $('scrim').classList.remove('open');
+  setTimeout(() => { if (!$('drawer').classList.contains('open')) $('scrim').hidden = true; }, 260);
+}
+
+function selectTab(name) {
+  for (const b of document.querySelectorAll('.tabs [data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  for (const p of document.querySelectorAll('[data-panel]')) p.hidden = p.dataset.panel !== name;
 }
 
 const turnName = () => (state.game.turn() === 'w' ? 'White' : 'Black');
@@ -120,6 +148,7 @@ async function startCameras() {
   } else {
     setStatus('Cameras on and calibrated. Press Start tracking.', 'ok');
   }
+  if (state.cams.length) closeDrawer();
   updateButtons();
 }
 
@@ -149,7 +178,7 @@ async function addCamera(key, deviceId, stream) {
     corners: [], calibrating: false, sampler: null, prev: null, cur: null, ref: null, motion: 1, scores: null,
   };
   el.querySelector('.cam-title').textContent = `Camera ${key}`;
-  el.querySelector('.cam-state').textContent = `${label} · ${vw}×${vh}`;
+  el.querySelector('.cam-state').textContent = `${label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)/i, '')}, ${vw}×${vh}`;
 
   const savedCorners = store.get('calib', {})[deviceId];
   if (savedCorners?.length === 4) applyCorners(cam, savedCorners);
@@ -209,12 +238,11 @@ function updateCamHint(cam) {
   undo.hidden = !cam.calibrating || cam.corners.length === 0;
   cam.el.querySelector('.btn-calibrate').textContent = cam.sampler ? 'Recalibrate' : 'Calibrate';
   if (cam.calibrating) {
-    hint.textContent = `Click the outer corner of square ${CORNER_ORDER[cam.corners.length]} ` +
-      `(${cam.corners.length + 1} of 4). Use the corners of the playing area, not the wooden frame.`;
+    hint.textContent = `Click the outer corner of ${CORNER_ORDER[cam.corners.length]} (${cam.corners.length + 1} of 4)`;
   } else if (cam.sampler) {
-    hint.textContent = 'Calibrated. The green grid should sit on the squares.';
+    hint.textContent = '';
   } else {
-    hint.textContent = 'Not calibrated yet.';
+    hint.textContent = 'Press Calibrate, then click the four corners of the board';
   }
 }
 
@@ -244,8 +272,11 @@ function tick() {
     state.stillSince = now;
   }
   const settled = state.stillSince !== null && now - state.stillSince >= settings.settle * 1000;
-  if (settled && !state.analysed) {
+  // Read the board once it settles, then re-check every 1.5 s while it stays still,
+  // so a move that was read too early (or a slow, gentle move) is still picked up.
+  if (settled && (!state.analysed || now - state.lastAnalysis > 1500)) {
     state.analysed = true;
+    state.lastAnalysis = now;
     analyse(ready);
   }
 }
@@ -287,6 +318,9 @@ function playMove(mv) {
     return false;
   }
   state.marks = { squares: touchedSquares(res), kind: 'ok' };
+  state.anim = [[res.from, res.to]];
+  if (res.flags.includes('k')) state.anim.push(['h' + res.from[1], 'f' + res.from[1]]);
+  if (res.flags.includes('q')) state.anim.push(['a' + res.from[1], 'd' + res.from[1]]);
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
   state.pending = null;
   hideChoice();
@@ -470,6 +504,9 @@ function renderFolder() {
     ? `Auto-saving after every move${state.autosavedFile ? ` to ${state.autosavedFile}` : ''}.`
     : 'Pick a folder and the game is saved there as a .pgn file after every move. Without a folder, games download to your Downloads folder when you press Save & new game.';
   $('btnExportAll').hidden = !name || store.get('games', []).length === 0;
+  $('folderLine').textContent = !name ? 'No games folder yet. Choose one in Setup, Games.'
+    : state.needsFolderPermission ? `Saving to "${name}" is paused. Open Setup, Games and press Allow.`
+      : `Auto-saving to ${name}${state.autosavedFile ? `/${state.autosavedFile}` : ''}`;
 }
 
 function download(text, name) {
@@ -503,12 +540,33 @@ function renderBoard() {
       const p = rows[7 - rank][file];
       const name = 'abcdefgh'[file] + (rank + 1);
       const sq = document.createElement('div');
+      sq.dataset.sq = name;
       sq.className = `sq ${(file + rank) % 2 ? 'light' : 'dark'}${lit.has(name) ? ' hl' : ''}`;
       if (p) sq.innerHTML = `<span class="pc ${p.color}">${GLYPH[p.type]}</span>`;
       if (vr === 7) sq.insertAdjacentHTML('beforeend', `<span class="coord file">${'abcdefgh'[file]}</span>`);
       if (vf === 0) sq.insertAdjacentHTML('beforeend', `<span class="coord rank">${rank + 1}</span>`);
       board.appendChild(sq);
     }
+  }
+  animatePieces(board);
+}
+
+/** Slide the piece(s) of the last move from their old square to the new one. */
+function animatePieces(board) {
+  const moves = state.anim;
+  state.anim = null;
+  if (!moves || reduceMotion()) return;
+  for (const [from, to] of moves) {
+    const a = board.querySelector(`[data-sq="${from}"]`)?.getBoundingClientRect();
+    const target = board.querySelector(`[data-sq="${to}"]`);
+    const pc = target?.querySelector('.pc');
+    if (!a || !pc) continue;
+    const b = target.getBoundingClientRect();
+    pc.style.zIndex = 3;
+    pc.animate(
+      [{ transform: `translate(${a.left - b.left}px, ${a.top - b.top}px) scale(1.08)` }, { transform: 'none' }],
+      { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' },
+    ).onfinish = () => { pc.style.zIndex = ''; };
   }
 }
 
@@ -561,9 +619,9 @@ function renderSaved() {
     li.innerHTML = `<div class="info"><div class="title"></div><div class="meta"></div></div>
       <div class="acts"><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
       <button data-act="del" class="ghost">Delete</button></div>`;
-    li.querySelector('.title').textContent = `${savedTitle(g)} · ${g.result}`;
+    li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.result}`;
     li.querySelector('.meta').textContent =
-      `${g.white} vs ${g.black} · ${new Date(g.date).toLocaleString()} · ${Math.ceil(g.moves / 2)} moves`;
+      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} moves, ${new Date(g.date).toLocaleString()}`;
     li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, g.file || pgnName(g.white, g.black, g.date, g.event));
     li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
     li.querySelector('[data-act="del"]').onclick = () => {
@@ -628,9 +686,13 @@ function hideChoice() { $('choice').hidden = true; $('choice').innerHTML = ''; }
 
 function updateButtons() {
   const ready = state.cams.length > 0 && state.cams.every((c) => c.sampler);
-  $('btnTrack').disabled = !ready;
-  $('btnTrack').textContent = state.tracking ? 'Pause tracking' : 'Start tracking';
-  $('btnTrack').classList.toggle('primary', !state.tracking);
+  const btn = $('btnTrack');
+  btn.disabled = !ready;
+  btn.classList.toggle('on', state.tracking);
+  btn.innerHTML = state.tracking
+    ? '<svg><use href="#i-pause"/></svg><span>Pause</span>'
+    : '<svg><use href="#i-play"/></svg><span>Start tracking</span>';
+  $('live').hidden = !state.tracking;
   $('btnUndo').disabled = state.game.history().length === 0;
 }
 
@@ -689,7 +751,7 @@ function drawCams() {
     });
 
     if (state.tracking && cam.sampler) {
-      label(ctx, state.moving ? 'hand in view' : 'still', 10, 22, state.moving ? '#ffcc4d' : '#7dff9a');
+      label(ctx, state.moving ? 'hand in view' : 'still', 12, canvas.height - 14, state.moving ? '#ffcc4d' : '#7dff9a');
     }
   }
   requestAnimationFrame(drawCams);
@@ -804,9 +866,17 @@ function init() {
     else if (k === 'u') undoMove();
     else if (k === 'b') rebaseline();
     else if (k === 'm') { e.preventDefault(); $('manualMove').focus(); }
+    else if (k === 's') { $('drawer').classList.contains('open') ? closeDrawer() : openDrawer(); }
+    else if (k === 'escape') closeDrawer();
   });
+  $('btnSettings').onclick = () => openDrawer();
+  $('btnOpenSetup').onclick = () => openDrawer('cameras');
+  $('btnCloseDrawer').onclick = closeDrawer;
+  $('scrim').onclick = closeDrawer;
+  for (const b of document.querySelectorAll('.tabs [data-tab]')) b.onclick = () => selectTab(b.dataset.tab);
 
   listCameras(false).catch(() => {});
+  if (!state.cams.length) setTimeout(() => openDrawer('cameras'), 300);
   navigator.mediaDevices?.addEventListener?.('devicechange', () => listCameras(false).catch(() => {}));
   setInterval(tick, TICK_MS);
   requestAnimationFrame(drawCams);

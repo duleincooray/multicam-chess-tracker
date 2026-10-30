@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- New single-screen layout with no page scrolling: cameras, board and score sheet side by side; setup, detection settings and saved games moved into a slide-out panel (gear button or S).
+- Pieces slide to their new square when a move is recorded; status, move list and panels animate in. Animations are off when the system asks for reduced motion.
+- A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
+
 ### Added
 - Games folder: pick a folder once and the game is auto-saved there as a .pgn file after every move (Chrome/Edge). Renaming updates the file. Without a folder, Save & new game downloads the PGN.
 - Rename saved games (game name, White, Black); the PGN headers and download file name follow.

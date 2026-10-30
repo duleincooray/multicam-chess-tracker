@@ -92,3 +92,14 @@ test('a hand or shadow over many squares is reported as covered, not as a move',
   assert.equal(r.status, 'covered');
   assert.equal(r.changed.length, 10);
 });
+
+test('a subtle move below the normal threshold is still found when it clearly fits', () => {
+  const r = inferMove(new Chess(), scoresFor({ g1: 0.2, f3: 0.18 }));
+  assert.equal(r.status, 'move');
+  assert.equal(r.move.san, 'Nf3');
+  assert.equal(r.weak, true);
+});
+
+test('faint noise on unrelated squares is not turned into a move', () => {
+  assert.equal(inferMove(new Chess(), scoresFor({ d5: 0.2, a6: 0.18 })).status, 'none');
+});

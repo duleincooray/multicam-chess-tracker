@@ -43,7 +43,15 @@ export function inferMove(game, scores, opts = {}) {
 
   const changedIdx = [];
   for (let i = 0; i < 64; i++) if (scores[i] >= onT) changedIdx.push(i);
-  if (!changedIdx.length) return { status: 'none' };
+  if (!changedIdx.length) {
+    // Second, gentler pass for subtle moves (small pieces on far squares, one camera at
+    // a low angle). Only accepted when one legal move clearly beats every other.
+    if (opts.weakPass === false) return { status: 'none' };
+    const weak = inferMove(game, scores, {
+      ...opts, onT: onT * 0.6, lowT: lowT * 0.6, margin: Math.max(margin, 0.08), weakPass: false,
+    });
+    return weak.status === 'move' ? { ...weak, weak: true } : { status: 'none' };
+  }
   if (changedIdx.length > maxChanged) return { status: 'covered', changed: changedIdx.map(sqName) };
 
   const ranked = [];

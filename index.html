@@ -5,142 +5,161 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chess Cam Tracker</title>
   <meta name="description" content="Record over-the-board chess games from one or two webcams, right in the browser.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
   <script type="importmap">
     { "imports": { "chess.js": "./vendor/chess.js" } }
   </script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">♞</span>
-      <h1>Chess Cam Tracker</h1>
-    </div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM13 5h3v14h-3z" fill="currentColor"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 6 4 11l5 5M4.5 11H14a5 5 0 0 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -2)"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="i-flip" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M5.5 18.5l2.1-2.1M16.4 7.6l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="bar">
+    <div class="brand"><span class="knight" aria-hidden="true">♞</span>Chess Cam Tracker</div>
     <div id="status" class="status idle" role="status" aria-live="polite">Set up your cameras to begin.</div>
+    <div class="bar-actions">
+      <span id="live" class="live" hidden>Live</span>
+      <button id="btnSettings" class="icon" title="Setup (S)" aria-label="Open setup"><svg><use href="#i-gear"/></svg></button>
+    </div>
   </header>
 
-  <main>
-    <!-- ───────────── Setup ───────────── -->
-    <details id="setup" class="card setup" open>
-      <summary>Setup</summary>
-      <div class="setup-grid">
-        <fieldset>
-          <legend>Cameras</legend>
-          <label>Camera A <select id="camA"></select></label>
-          <label>Camera B <select id="camB"></select></label>
-          <label>Resolution
-            <select id="resolution">
-              <option value="2560x1440">2560 × 1440 (highest, one camera)</option>
-              <option value="1920x1080">1920 × 1080</option>
-              <option value="1280x720" selected>1280 × 720</option>
-              <option value="640x480">640 × 480 (use if two cameras won't start together)</option>
-            </select>
-          </label>
-          <div class="row">
-            <button id="btnCameras" class="primary">Start cameras</button>
-            <button id="btnRefreshCams" class="ghost" title="Refresh camera list">↻</button>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>Game</legend>
-          <label>White <input id="white" placeholder="White"></label>
-          <label>Black <input id="black" placeholder="Black"></label>
-          <label>Event <input id="event" placeholder="Casual game"></label>
-        </fieldset>
-
-        <fieldset>
-          <legend>Detection</legend>
-          <label>Settle time <output id="settleOut"></output>
-            <input id="settle" type="range" min="0.4" max="3" step="0.1">
-          </label>
-          <label>Square sensitivity <output id="squareOut"></output>
-            <input id="squareT" type="range" min="0.1" max="0.6" step="0.01">
-          </label>
-          <label>Colour threshold <output id="pixelOut"></output>
-            <input id="pixelT" type="range" min="10" max="80" step="1">
-          </label>
-          <label>Hand / motion threshold <output id="motionOut"></output>
-            <input id="motionT" type="range" min="0.001" max="0.03" step="0.001">
-          </label>
-          <label class="check"><input id="sound" type="checkbox"> Beep when a move is recorded</label>
-          <label class="check"><input id="heatmap" type="checkbox"> Show change heatmap</label>
-          <button id="btnResetSettings" class="ghost small">Reset to defaults</button>
-        </fieldset>
+  <main class="stage">
+    <section class="cams" aria-label="Cameras">
+      <div id="cams" class="cam-stack"></div>
+      <div class="cams-empty" id="camsEmpty">
+        <p>No camera running.</p>
+        <button id="btnOpenSetup" class="primary">Set up cameras</button>
       </div>
-    </details>
+    </section>
 
-    <div class="layout">
-      <!-- ───────────── Cameras ───────────── -->
-      <section class="cams" id="cams" aria-label="Cameras"></section>
+    <section class="center" aria-label="Board">
+      <div class="board-frame"><div id="board" class="board" aria-label="Current position"></div></div>
+      <div class="dock">
+        <button id="btnTrack" class="dock-main" disabled title="Start or pause tracking (Space)">
+          <svg><use href="#i-play"/></svg><span>Start tracking</span>
+        </button>
+        <button id="btnUndo" class="icon" title="Undo last move (U)" aria-label="Undo"><svg><use href="#i-undo"/></svg></button>
+        <button id="btnBaseline" class="icon" title="Accept the board as it looks now (B)" aria-label="Re-baseline"><svg><use href="#i-eye"/></svg></button>
+        <button id="btnFlip" class="icon" title="Flip board" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
+      </div>
+      <div id="choice" class="choice" hidden></div>
+    </section>
 
-      <!-- ───────────── Board & game ───────────── -->
-      <section class="game card" aria-label="Game">
-        <div class="board-wrap">
-          <div id="board" class="board" aria-label="Current position"></div>
+    <aside class="sheet" aria-label="Score sheet">
+      <div class="players">
+        <input id="white" placeholder="White" aria-label="White player">
+        <span class="vs">vs</span>
+        <input id="black" placeholder="Black" aria-label="Black player">
+      </div>
+      <ol id="moves" class="moves"></ol>
+      <form id="manualForm" class="manual">
+        <input id="manualMove" placeholder="Type a missed move" autocomplete="off" aria-label="Manual move">
+      </form>
+      <div class="sheet-actions">
+        <button id="btnSaveGame" class="primary" title="Save this game and start a new one">Save &amp; new</button>
+        <button id="btnDownload" class="icon" title="Download PGN" aria-label="Download PGN"><svg><use href="#i-down"/></svg></button>
+        <button id="btnCopy" class="icon" title="Copy PGN" aria-label="Copy PGN"><svg><use href="#i-copy"/></svg></button>
+      </div>
+      <p id="folderLine" class="folder-line"></p>
+    </aside>
+  </main>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="drawer" class="drawer" aria-label="Setup" aria-hidden="true">
+    <div class="drawer-head">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="cameras" aria-selected="true">Cameras</button>
+        <button role="tab" data-tab="detection" aria-selected="false">Detection</button>
+        <button role="tab" data-tab="games" aria-selected="false">Games</button>
+      </nav>
+      <button id="btnCloseDrawer" class="icon" aria-label="Close setup"><svg><use href="#i-close"/></svg></button>
+    </div>
+
+    <div class="drawer-body">
+      <section class="tab" data-panel="cameras">
+        <label>Camera A <select id="camA"></select></label>
+        <label>Camera B <select id="camB"></select></label>
+        <label>Resolution
+          <select id="resolution">
+            <option value="2560x1440">2560 × 1440 (one camera)</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="1280x720" selected>1280 × 720</option>
+            <option value="640x480">640 × 480 (two cameras on one USB port)</option>
+          </select>
+        </label>
+        <div class="row">
+          <button id="btnCameras" class="primary">Start cameras</button>
+          <button id="btnRefreshCams" class="ghost">Refresh list</button>
         </div>
+        <p class="note">Then press Calibrate on each camera and click the board's outer corners in the order a1, h1, h8, a8.</p>
+        <label>Event <input id="event" placeholder="Casual game"></label>
+        <label>Promote pawns to
+          <select id="promotion">
+            <option value="q">Queen</option><option value="r">Rook</option>
+            <option value="b">Bishop</option><option value="n">Knight</option>
+          </select>
+        </label>
+      </section>
 
-        <div class="controls">
-          <button id="btnTrack" class="primary" disabled>Start tracking</button>
-          <button id="btnUndo" title="Undo last move (U)">Undo</button>
-          <button id="btnBaseline" title="Accept the board as it looks now (B)">Re-baseline</button>
-          <button id="btnFlip" title="Flip board">Flip</button>
-          <label class="promo">Promote to
-            <select id="promotion">
-              <option value="q">Queen</option><option value="r">Rook</option>
-              <option value="b">Bishop</option><option value="n">Knight</option>
-            </select>
-          </label>
-        </div>
+      <section class="tab" data-panel="detection" hidden>
+        <label>Settle time <output id="settleOut"></output>
+          <input id="settle" type="range" min="0.4" max="3" step="0.1">
+        </label>
+        <label>Square sensitivity <output id="squareOut"></output>
+          <input id="squareT" type="range" min="0.1" max="0.6" step="0.01">
+        </label>
+        <label>Colour threshold <output id="pixelOut"></output>
+          <input id="pixelT" type="range" min="10" max="80" step="1">
+        </label>
+        <label>Hand and motion threshold <output id="motionOut"></output>
+          <input id="motionT" type="range" min="0.001" max="0.03" step="0.001">
+        </label>
+        <label class="check"><input id="sound" type="checkbox"> Beep when a move is recorded</label>
+        <label class="check"><input id="heatmap" type="checkbox"> Show what each camera sees changing</label>
+        <button id="btnResetSettings" class="ghost">Reset to defaults</button>
+      </section>
 
-        <form id="manualForm" class="manual">
-          <input id="manualMove" placeholder="Type a missed move, e.g. Nf3" autocomplete="off" aria-label="Manual move">
-          <button type="submit">Add</button>
-        </form>
-
-        <div id="choice" class="choice" hidden></div>
-
-        <h2>Moves</h2>
-        <ol id="moves" class="moves"></ol>
-
-        <div class="controls">
-          <button id="btnDownload">Download PGN</button>
-          <button id="btnCopy">Copy PGN</button>
-          <button id="btnSaveGame" class="primary">Save &amp; new game</button>
-        </div>
-
-        <h2>Saved games</h2>
+      <section class="tab" data-panel="games" hidden>
         <div class="folder">
-          <span>Games folder: <strong id="folderName">not set</strong></span>
+          <div>Games folder: <strong id="folderName">not set</strong></div>
           <div class="row">
             <button id="btnFolder">Choose folder…</button>
             <button id="btnExportAll" class="ghost" hidden>Save all to folder</button>
           </div>
+          <p id="folderHint" class="note"></p>
         </div>
-        <p id="folderHint" class="hint">Pick a folder and every game you save is written there as a .pgn file.
-          Without a folder, games download to your Downloads folder.</p>
         <ul id="saved" class="saved"></ul>
       </section>
     </div>
-
-    <p class="footer">
-      Keys: <kbd>Space</kbd> pause/resume · <kbd>U</kbd> undo · <kbd>B</kbd> re-baseline · <kbd>M</kbd> type a move.
-      Everything runs in your browser; no video leaves your computer.
-    </p>
-  </main>
+    <p class="drawer-foot">Keys: <kbd>Space</kbd> pause, <kbd>U</kbd> undo, <kbd>B</kbd> re-baseline, <kbd>M</kbd> type a move, <kbd>S</kbd> setup. Video never leaves your computer.</p>
+  </aside>
 
   <template id="camTemplate">
-    <article class="card cam">
-      <div class="cam-head">
-        <h2 class="cam-title"></h2>
+    <article class="cam">
+      <canvas class="cam-canvas"></canvas>
+      <div class="cam-top">
+        <span class="cam-title"></span>
         <span class="cam-state"></span>
+        <span class="cam-actions">
+          <button class="btn-undo-point chip" hidden>Undo point</button>
+          <button class="btn-calibrate chip">Calibrate</button>
+        </span>
       </div>
-      <div class="cam-view"><canvas class="cam-canvas"></canvas></div>
       <p class="cam-hint"></p>
-      <div class="row">
-        <button class="btn-calibrate">Calibrate</button>
-        <button class="btn-undo-point ghost" hidden>Undo point</button>
-      </div>
     </article>
   </template>
 
