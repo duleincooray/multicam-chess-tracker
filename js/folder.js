@@ -55,17 +55,32 @@ export async function ensurePermission(ask = true) {
   return (await handle.requestPermission(opts)) === 'granted';
 }
 
-/** Write (or overwrite) a text file in the chosen folder. Returns true on success. */
-export async function writeFile(name, text) {
+/** Folder handle for "a/b" inside the chosen folder, creating folders as needed. */
+async function dirFor(parts, create) {
+  let dir = handle;
+  for (const p of parts) dir = await dir.getDirectoryHandle(p, { create });
+  return dir;
+}
+
+/**
+ * Write (or overwrite) a file in the chosen folder. `path` may contain sub-folders
+ * ("2026-10-30_121536/cam-A/ply-001.jpg"); `data` is text or a Blob. Returns true on success.
+ */
+export async function writeFile(path, data) {
   if (!(await ensurePermission())) return false;
-  const fh = await handle.getFileHandle(name, { create: true });
+  const parts = path.split('/').filter(Boolean);
+  const name = parts.pop();
+  const dir = await dirFor(parts, true);
+  const fh = await dir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
-  await w.write(text);
+  await w.write(data);
   await w.close();
   return true;
 }
 
-export async function removeFile(name) {
-  if (!name || !(await ensurePermission(false))) return;
-  try { await handle.removeEntry(name); } catch { /* already gone */ }
+export async function removeFile(path) {
+  if (!path || !(await ensurePermission(false))) return;
+  const parts = path.split('/').filter(Boolean);
+  const name = parts.pop();
+  try { await (await dirFor(parts, false)).removeEntry(name); } catch { /* already gone */ }
 }

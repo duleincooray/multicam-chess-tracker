@@ -6,8 +6,11 @@ import {
 import { inferMove, touchedSquares, buildPgn, sqIndex, reconsiderLastMove } from './tracker.js';
 import * as store from './storage.js';
 import * as folder from './folder.js';
+import {
+  parseTimeControl, timedGame, summarize, totals, accuracyCsv, labelsCsv,
+} from './research.js';
 
-const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false };
+const DEFAULTS = { settle: 1.0, squareT: 0.25, pixelT: 30, motionT: 0.004, sound: true, heatmap: false, dataset: true, timeControl: '' };
 const WORK_W_MAX = 960; // max width of the image the detector analyses (more detail on far squares)
 const TICK_MS = 100;    // detector runs ~10 times a second
 const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
@@ -27,6 +30,9 @@ const state = {
   pending: null,
   prevRefs: null,
   stats: {},
+  meta: [],        // one entry per recorded move: where it came from, confidence, time
+  events: [],      // everything that happened, including moves later undone or corrected
+  clockStart: null,
   audio: null,
 };
 
@@ -287,13 +293,16 @@ function analyse(ready) {
   if (ready.some((c) => !c.ref)) {
     ready.forEach((c) => { c.ref = c.cur; });
     setStatus(`Watching the board. ${turnName()} to move.`, 'ok');
+    capturePly(state.game.history().length, null, 'start', true); // photo of the starting position
     return;
   }
+  // When the board went still, i.e. when the player let go of the piece.
+  const settledAt = Date.now() - (performance.now() - (state.stillSince ?? performance.now()));
   const scores = combineScores(ready.map((c) => squareScores(c.ref, c.cur, c.sampler.per, settings.pixelT)));
   const r = inferMove(state.game, scores, { onT: settings.squareT, promotion: $('promotion').value });
 
   if (r.status === 'move') {
-    playMove(r.move, { auto: true });
+    playMove(r.move, { auto: true, source: r.weak ? 'weak' : 'auto', conf: r.score, at: settledAt });
   } else if ((r.status === 'nofit' || r.status === 'ambiguous') && tryCorrection(ready)) {
     // the last detected move was wrong and has been fixed
   } else if (r.status === 'ambiguous') {
@@ -325,13 +334,17 @@ function tryCorrection(ready) {
   const d = reconsiderLastMove(before, last.san, scores, { onT: settings.squareT, promotion: $('promotion').value });
   if (d.action === 'keep') return false;
 
+  const ply = state.game.history().length;
+  const popped = state.meta.pop();
+  state.events.push({ type: d.action === 'replace' ? 'replaced' : 'dropped', san: last.san, source: popped?.source, ply, at: Date.now() });
+  removePly(ply);
   state.game.undo();
   state.prevRefs = null;
   hideResult();
   hideChoice();
   state.stats.corrected = (state.stats.corrected || 0) + 1;
   if (d.action === 'replace') {
-    playMove(d.move, { note: `Corrected ${last.san} to ${d.move.san}.` });
+    playMove(d.move, { note: `Corrected ${last.san} to ${d.move.san}.`, source: 'corrected', at: popped?.at });
   } else {
     for (const c of state.cams) if (c.cur) c.ref = c.cur;
     state.marks = { squares: [], kind: 'ok' };
@@ -344,6 +357,18 @@ function tryCorrection(ready) {
 
 // ───────────────────────────────────────── game
 
+/** Remember where a move came from and how long it took (for the accuracy log and PGN times). */
+function recordMove(res, opts) {
+  const source = opts.source || 'manual';
+  const at = opts.at ?? Date.now();
+  const prevAt = state.meta.at(-1)?.at ?? state.clockStart ?? at;
+  const conf = opts.conf != null ? Math.round(opts.conf * 1000) / 1000 : null;
+  state.meta.push({ source, conf, at, emt: Math.max(0, at - prevAt) });
+  const ply = state.game.history().length;
+  state.events.push({ type: 'move', source, san: res.san, ply, conf, at });
+  capturePly(ply, res.san, source);
+}
+
 function playMove(mv, opts = {}) {
   let res;
   try {
@@ -352,6 +377,7 @@ function playMove(mv, opts = {}) {
     setStatus(`"${mv}" isn't a legal move here.`, 'warn');
     return false;
   }
+  recordMove(res, opts);
   // Keep the image from before a detected move, so a misread can be corrected later.
   state.prevRefs = opts.auto ? state.cams.map((c) => c.ref) : null;
   state.marks = { squares: touchedSquares(res), kind: 'ok' };
@@ -397,6 +423,7 @@ function celebrate(lastMove) {
   const ended = mate ? `Checkmate. ${PLAYER(winner)} wins ${score}.` : `${kind}. Game drawn.`;
   setStatus(`${ended} Game saved.`, 'ok');
   saveFinishedGame().then((note) => setStatus(`${ended} Game saved.${note}`, 'ok'));
+  writeDataset().then(writeAccuracyFile);
   $('resultKind').textContent = kind;
   $('resultWho').textContent = who;
   $('resultScore').textContent = score;
@@ -477,8 +504,12 @@ function confetti(winner) {
 
 function undoMove() {
   if (state.review) return;
+  const ply = state.game.history().length;
   const undone = state.game.undo();
   if (!undone) return;
+  const popped = state.meta.pop();
+  state.events.push({ type: 'undo', san: undone.san, source: popped?.source, ply, at: Date.now() });
+  removePly(ply);
   state.prevRefs = null;
   hideResult();
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
@@ -507,9 +538,9 @@ function headers() {
   };
 }
 
+/** The game as PGN, with the time each move took (and clock times when a time control is set). */
 function currentPgn() {
-  const g = new Chess();
-  g.loadPgn(state.game.pgn());
+  const g = timedGame(state.game, state.meta.map((m) => m.emt), parseTimeControl(settings.timeControl));
   return buildPgn(g, headers());
 }
 
@@ -527,7 +558,10 @@ function saveCurrent() {
   const white = $('white').value, black = $('black').value, event = $('event').value;
   const file = pgnName(white || 'White', black || 'Black', started, event || 'Casual game');
   const downloaded = state.game.isGameOver() ? cur.downloaded : false; // re-download if a finished game changes
-  store.set('current', { ...cur, id, started, ended, playing: n > 0, pgn: state.game.pgn(), white, black, event, file, downloaded });
+  store.set('current', {
+    ...cur, id, started, ended, playing: n > 0, pgn: state.game.pgn(), white, black, event, file, downloaded,
+    meta: state.meta, events: state.events,
+  });
   upsertCurrentGame();
   if (n || cur.playing) {
     autosaveChain = autosaveChain.then(() => autosave(file, cur.file)).catch((err) => console.warn('Autosave failed', err));
@@ -547,6 +581,8 @@ function upsertCurrentGame(final = false) {
       id: cur.id, date: cur.started, ended: cur.ended, white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: n, pgn, file: cur.file,
       inProgress: !final && !state.game.isGameOver(),
+      meta: state.meta, events: state.events, summary: summarize(state.meta, state.events),
+      dataDir: cur.dataset?.dir, cameras: state.cams.length || cur.cameras,
     });
   }
   if (!store.set('games', games)) setStatus('This browser is out of storage space. Choose a games folder to keep saving.', 'warn');
@@ -585,6 +621,10 @@ function restoreCurrent() {
   if (cur.pgn) {
     try { state.game.loadPgn(cur.pgn); } catch { state.game.reset(); }
   }
+  const n = state.game.history().length;
+  state.meta = (cur.meta || []).slice(0, n);
+  while (state.meta.length < n) state.meta.push({ source: 'unknown' });
+  state.events = cur.events || [];
 }
 
 async function saveAndNewGame() {
@@ -595,8 +635,13 @@ async function saveAndNewGame() {
       ? ` It's in ${folder.folderName()}/${store.get('current', {}).file}.`
       : await saveFinishedGame());
   }
+  if (state.game.history().length) await writeDataset(); // final labels and log for the finished game
+  writeAccuracyFile();
   state.game = new Chess();
   state.prevRefs = null;
+  state.meta = [];
+  state.events = [];
+  state.clockStart = state.tracking ? Date.now() : null;
   const started = new Date().toISOString();
   $('event').value = ''; // a new game gets its own name; players carry over
   store.set('current', { id: Date.now(), started, pgn: '', white: $('white').value, black: $('black').value, event: '' });
@@ -756,6 +801,116 @@ function renderMoves() {
   else list.scrollTop = list.scrollHeight;
 }
 
+// ───────────────────────────────────────── research data
+
+let datasetChain = Promise.resolve();
+const pad = (n, w = 2) => String(n).padStart(w, '0');
+const stampOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+
+/**
+ * Save a photo from every camera showing the board right now, labelled with the exact position.
+ * Files go to <games folder>/<game date-time>/cam-A/ply-012.jpg. The frames and position are taken
+ * immediately; writing happens in the background, one file at a time.
+ */
+function capturePly(ply, san, source, onlyIfMissing = false) {
+  if (!settings.dataset || !folder.folderName() || state.review) return;
+  const cams = state.cams.filter((c) => c.video.readyState >= 2 && c.video.videoWidth);
+  if (!cams.length) return;
+  const fen = state.game.fen();
+  const at = new Date().toISOString();
+  // Grab the frames now, before anything else can change on the board.
+  const shots = cams.map((c) => {
+    const cv = document.createElement('canvas');
+    cv.width = c.video.videoWidth;
+    cv.height = c.video.videoHeight;
+    cv.getContext('2d').drawImage(c.video, 0, 0);
+    return { key: c.key, blob: new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.9)) };
+  });
+  datasetChain = datasetChain.then(async () => {
+    if (!(await folder.ensurePermission(false))) { state.needsFolderPermission = true; renderFolder(); return; }
+    const cur = store.get('current', {});
+    const ds = cur.dataset || { dir: stampOf(new Date()), entries: [] };
+    if (onlyIfMissing && ds.entries.some((e) => e.ply === ply)) return;
+    const images = {};
+    for (const sh of shots) {
+      const path = `cam-${sh.key}/ply-${pad(ply, 3)}.jpg`;
+      const blob = await sh.blob;
+      if (blob && await folder.writeFile(`${ds.dir}/${path}`, blob)) images[sh.key] = path;
+    }
+    ds.entries = ds.entries.filter((e) => e.ply !== ply);
+    ds.entries.push({ ply, san, fen, source, at, images });
+    ds.entries.sort((a, b) => a.ply - b.ply);
+    store.set('current', { ...store.get('current', {}), dataset: ds, cameras: state.cams.length });
+    await writeDatasetFiles();
+  }).catch((err) => console.warn('Dataset photo failed', err));
+}
+
+/** A move was undone or corrected: its photos no longer show a real position, so remove them. */
+function removePly(ply) {
+  datasetChain = datasetChain.then(async () => {
+    const cur = store.get('current', {});
+    const ds = cur.dataset;
+    if (!ds || !folder.folderName()) return;
+    for (const e of ds.entries.filter((x) => x.ply >= ply)) {
+      for (const path of Object.values(e.images || {})) await folder.removeFile(`${ds.dir}/${path}`);
+    }
+    ds.entries = ds.entries.filter((x) => x.ply < ply);
+    store.set('current', { ...cur, dataset: ds });
+    await writeDatasetFiles();
+  }).catch((err) => console.warn('Dataset cleanup failed', err));
+}
+
+/** labels.json / labels.csv (what each photo shows), log.json (every detection) and a copy of the game. */
+async function writeDatasetFiles() {
+  const cur = store.get('current', {});
+  const ds = cur.dataset;
+  if (!ds || !folder.folderName()) return;
+  const h = headers();
+  const cameras = state.cams.map((c) => ({
+    key: c.key, label: c.label, width: c.video.videoWidth, height: c.video.videoHeight,
+    corners: { order: CORNER_ORDER, points: c.corners }, // normalised 0..1 image coordinates
+  }));
+  const labels = {
+    format: 'chess-cam-tracker dataset v1',
+    note: 'Each image shows the board after `ply` half-moves; `fen` is the exact position. Corners are the calibrated outer corners of the playing area (a1, h1, h8, a8) in normalised image coordinates.',
+    game: { event: h.Event, white: h.White, black: h.Black, started: cur.started },
+    cameras,
+    positions: ds.entries,
+  };
+  await folder.writeFile(`${ds.dir}/labels.json`, JSON.stringify(labels, null, 2));
+  await folder.writeFile(`${ds.dir}/labels.csv`, labelsCsv(ds.entries));
+  await folder.writeFile(`${ds.dir}/log.json`, JSON.stringify({
+    summary: summarize(state.meta, state.events),
+    moves: state.game.history().map((san, i) => ({ ply: i + 1, san, ...state.meta[i] })),
+    events: state.events,
+    settings: { ...settings },
+  }, null, 2));
+  if (state.game.history().length) await folder.writeFile(`${ds.dir}/game.pgn`, currentPgn());
+}
+
+function writeDataset() {
+  datasetChain = datasetChain.then(writeDatasetFiles).catch((err) => console.warn('Dataset write failed', err));
+  return datasetChain;
+}
+
+/** accuracy.csv in the games folder: one row per game. */
+async function writeAccuracyFile() {
+  if (!folder.folderName() || !(await folder.ensurePermission(false))) return;
+  try { await folder.writeFile('accuracy.csv', accuracyCsv(store.get('games', []))); } catch { /* not essential */ }
+}
+
+function renderAccuracy() {
+  const games = store.get('games', []).filter((g) => g.summary?.moves);
+  const t = totals(games.map((g) => g.summary));
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  $('accuracy').textContent = t.moves
+    ? `Across ${t.games} game${t.games === 1 ? '' : 's'}, ${t.unaided} of ${t.moves} moves (${pct(t.unaidedRate)}) were recorded without help. ` +
+      `${t.misreads} misread${t.misreads === 1 ? '' : 's'}: ${t.selfFixed} fixed by the app, ${t.undone} undone by hand.`
+    : 'Accuracy numbers appear here once games are played with the cameras.';
+  const s = summarize(state.meta, state.events);
+  $('gameStats').textContent = s.moves ? `This game: ${s.unaided} of ${s.moves} moves without help (${pct(s.unaidedRate)})` : '';
+}
+
 // ───────────────────────────────────────── reviewing saved games
 
 const viewGame = () => (state.review ? state.review.view : state.game);
@@ -839,6 +994,7 @@ function playedAt(g) {
 
 function renderSaved() {
   renderFolder();
+  renderAccuracy();
   const ul = $('saved');
   ul.innerHTML = '';
   for (const g of store.get('games', [])) {
@@ -848,7 +1004,8 @@ function renderSaved() {
       <button data-act="del" class="ghost">Delete</button></div>`;
     li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.inProgress ? '(in progress)' : g.result === '*' ? '(unfinished)' : g.result}`;
     li.querySelector('.meta').textContent =
-      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} move${Math.ceil(g.moves / 2) === 1 ? '' : 's'}, ${playedAt(g)}`;
+      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} move${Math.ceil(g.moves / 2) === 1 ? '' : 's'}, ${playedAt(g)}` +
+      (g.summary?.moves ? `, ${Math.round(g.summary.unaidedRate * 100)}% detected without help` : '');
     li.querySelector('[data-act="open"]').onclick = () => openReview(g);
     li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, g.file || pgnName(g.white, g.black, g.date, g.event));
     li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
@@ -912,7 +1069,7 @@ function showChoice(cands) {
   for (const m of cands) {
     const b = document.createElement('button');
     b.textContent = m.san;
-    b.onclick = () => playMove(m);
+    b.onclick = () => playMove(m, { source: 'choice' });
     box.appendChild(b);
   }
 }
@@ -933,6 +1090,8 @@ function updateButtons() {
 function setTracking(on) {
   if (on && state.review) exitReview();
   state.tracking = on && state.cams.length > 0 && state.cams.every((c) => c.sampler);
+  // The first move's time is measured from when tracking starts.
+  if (state.tracking && !state.game.history().length) state.clockStart = Date.now();
   state.stillSince = null;
   state.analysed = false;
   if (state.tracking) setStatus('Keep hands off the board for a moment while it reads the position…', 'busy');
@@ -1038,6 +1197,8 @@ function bindSettings() {
     for (const [id, out, fmt] of fields) { $(id).value = settings[id]; $(out).textContent = fmt(settings[id]); }
     $('sound').checked = settings.sound;
     $('heatmap').checked = settings.heatmap;
+    $('dataset').checked = settings.dataset;
+    $('timeControl').value = settings.timeControl;
   };
   for (const [id, out, fmt] of fields) {
     $(id).addEventListener('input', () => {
@@ -1046,10 +1207,18 @@ function bindSettings() {
       store.set('settings', settings);
     });
   }
-  for (const id of ['sound', 'heatmap']) {
+  for (const id of ['sound', 'heatmap', 'dataset']) {
     $(id).addEventListener('change', () => { settings[id] = $(id).checked; store.set('settings', settings); });
   }
-  $('btnResetSettings').onclick = () => { Object.assign(settings, DEFAULTS); store.set('settings', settings); sync(); };
+  $('timeControl').addEventListener('change', () => {
+    const v = $('timeControl').value.trim();
+    if (v && !parseTimeControl(v)) { setStatus('Write the time control as minutes+seconds, for example 10+5.', 'warn'); return; }
+    settings.timeControl = v;
+    store.set('settings', settings);
+    saveCurrent(); // rewrite the game file with clock times
+  });
+  $('btnExportAccuracy').onclick = () => download(accuracyCsv(store.get('games', [])), 'accuracy.csv');
+    $('btnResetSettings').onclick = () => { Object.assign(settings, DEFAULTS); store.set('settings', settings); sync(); };
   sync();
 }
 
@@ -1091,7 +1260,7 @@ function init() {
   $('manualForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const text = $('manualMove').value.trim();
-    if (text && playMove(text)) $('manualMove').value = '';
+    if (text && playMove(text, { source: 'manual' })) $('manualMove').value = '';
   });
 
   document.addEventListener('keydown', (e) => {

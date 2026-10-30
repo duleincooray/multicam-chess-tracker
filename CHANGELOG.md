@@ -11,6 +11,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
 
 ### Added
+- Dataset: with a games folder connected, a photo from each camera is saved at every move into games/<date-time>/cam-X/ply-NNN.jpg, labelled with the exact position in labels.json and labels.csv (with camera calibration). Photos of undone or corrected moves are removed.
+- Detection log: every move records its source (auto, weak, corrected, choice, manual), confidence and time; undos and self-corrections are logged. Setup, Games shows the share of moves recorded without help across games; per-game log.json and an accuracy.csv export.
+- Move times in the PGN as [%emt], plus [%clk] clock times when a time control such as 10+5 is set.
 - Open saved games to review them: step through the moves with the buttons or arrow keys, or click any move. Esc goes back to the live game.
 - Self-correction: if the board stops matching the record after a detected move (for example a resting hand was read as a move), the app compares the board with how it looked before that move and swaps in the move that really happened, or drops the move if nothing moved.
 - Every game is saved automatically: the game in progress always appears in Saved games (marked in progress) and is updated after each move. When a game ends it is downloaded as PGN if no games folder is set. The Save & new button is now New game.

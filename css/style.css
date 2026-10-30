@@ -249,8 +249,8 @@ body.reviewing .moves span.last { background: color-mix(in srgb, var(--brass) 28
 .tabs { display: flex; gap: 4px; }
 .tabs button { border: 0; background: transparent; border-radius: 99px; padding: 7px 14px; color: var(--muted); }
 .tabs button[aria-selected="true"] { background: var(--bg); color: var(--ink); font-weight: 600; }
-.drawer-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
-.tab { display: grid; gap: 14px; animation: rise .25s var(--ease); }
+.drawer-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px 20px; }
+.tab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; animation: rise .25s var(--ease); }
 .tab label { display: grid; gap: 6px; font-size: 14px; }
 .tab label.check { display: flex; align-items: center; gap: 10px; }
 .tab select, .tab input:not([type="checkbox"]):not([type="range"]) {
@@ -266,16 +266,19 @@ kbd { font: 600 11px var(--ui); border: 1px solid var(--line); border-bottom-wid
 
 .folder { display: grid; gap: 10px; padding: 14px; border-radius: 10px; background: var(--bg); font-size: 14px; }
 .folder strong { overflow-wrap: anywhere; }
+.accuracy-card { display: grid; gap: 8px; justify-items: start; padding: 14px; border-radius: 10px; border: 1px solid var(--line); }
+.accuracy-card p { margin: 0; font: 16px/1.45 var(--book); }
+.folder label.check { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; }
 .saved { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .saved:empty::before { content: "Saved games will show up here."; color: var(--muted); font-size: 14px; }
 .saved li {
-  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 10px;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; animation: rise .3s var(--ease);
 }
 .saved .info { min-width: 0; }
 .saved .title { font-family: var(--book); font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved .meta { color: var(--muted); font-size: 12.5px; }
-.saved .acts { display: flex; gap: 4px; flex-shrink: 0; }
+.saved .acts { display: flex; gap: 4px; margin-left: auto; }
 .saved .acts button { padding: 4px 9px; font-size: 13px; }
 .rename { display: grid; gap: 8px; width: 100%; }
 .rename .acts { justify-content: flex-end; }

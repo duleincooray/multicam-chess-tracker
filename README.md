@@ -85,8 +85,60 @@ webcam frame ──► sample each square ──► compare with last position �
 - `js/tracker.js` — scores every legal move (via [chess.js](https://github.com/jhlywa/chess.js)) against the change
   scores; reports "ambiguous" or "no fit" rather than guessing.
 - `js/app.js` — cameras, calibration UI, detection loop, game record, saving.
+- `js/research.js` — move times, accuracy summary and dataset labels.
+- `js/folder.js` — writes games, photos and labels into the folder you choose.
 - `js/storage.js` — safe `localStorage` wrapper (settings, calibrations, games).
 - `vendor/chess.js` — bundled copy of chess.js so the app works offline. Update with `npm run vendor`.
+
+## Research data
+
+Connect a games folder (Setup, Games) and the app records three things for every game.
+
+### 1. Labelled photos (dataset)
+
+With **Save a photo from each camera at every move** on, each game gets its own folder:
+
+```
+games/
+  2026-10-30_121536/            one folder per game (date and time the photos started)
+    cam-A/ply-000.jpg           starting position, as camera A saw it
+    cam-A/ply-001.jpg           after White's first move
+    cam-B/ply-001.jpg           ...and from camera B
+    labels.json                 what every photo shows, plus camera calibration
+    labels.csv                  the same, one row per photo: image, camera, ply, move, fen
+    log.json                    every detection, correction and undo
+    game.pgn                    the game with move times
+  2026-10-30_121536_Dulein_vs_DK.pgn
+  accuracy.csv                  one row per game
+```
+
+The label of each photo is the exact board position (FEN) after `ply` half-moves, so every square in every
+image is labelled. `labels.json` also stores each camera's resolution and the four calibrated board corners
+(a1, h1, h8, a8, in normalised image coordinates), which is enough to cut out the 64 squares. When a move is
+undone or corrected, its photos are deleted so no image carries a wrong label.
+
+### 2. Detection log and accuracy
+
+Every recorded move is tagged with where it came from:
+
+| Source | Meaning |
+| --- | --- |
+| `auto` | detected by the cameras |
+| `weak` | detected by the gentler second pass |
+| `corrected` | the app replaced one of its own misreads |
+| `choice` | the app offered two moves and a person picked one |
+| `manual` | typed in by a person |
+
+- **Recorded without help** = moves from `auto`, `weak` and `corrected`, divided by all moves in the final record.
+- **Misreads** = detected moves that were later undone by hand, plus the ones the app fixed itself.
+
+Setup, Games shows the totals across games, and **Export accuracy CSV** downloads one row per game.
+
+### 3. Move times
+
+Each move in the PGN carries `[%emt h:mm:ss]`, the time it took (from when the board settled after the
+previous move to when it settled after this one). If you enter a time control such as `10+5` in Setup, moves also
+get `[%clk h:mm:ss]`, the clock left after the move, which Lichess and Chess.com show as clock times.
 
 ## Tests
 

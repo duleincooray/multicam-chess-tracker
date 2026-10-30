@@ -100,6 +100,7 @@
         <button id="btnDownload" class="icon" title="Download PGN" aria-label="Download PGN"><svg><use href="#i-down"/></svg></button>
         <button id="btnCopy" class="icon" title="Copy PGN" aria-label="Copy PGN"><svg><use href="#i-copy"/></svg></button>
       </div>
+      <p id="gameStats" class="folder-line"></p>
       <p id="folderLine" class="folder-line"></p>
     </aside>
   </main>
@@ -133,6 +134,7 @@
         </div>
         <p class="note">Then press Calibrate on each camera and click the board's outer corners in the order a1, h1, h8, a8.</p>
         <label>Event <input id="event" placeholder="Casual game"></label>
+        <label>Time control (optional) <input id="timeControl" placeholder="e.g. 10+5 for 10 minutes, 5 seconds a move" autocomplete="off"></label>
         <label>Promote pawns to
           <select id="promotion">
             <option value="q">Queen</option><option value="r">Rook</option>
@@ -167,6 +169,11 @@
             <button id="btnExportAll" class="ghost" hidden>Save all to folder</button>
           </div>
           <p id="folderHint" class="note"></p>
+          <label class="check"><input id="dataset" type="checkbox"> Save a photo from each camera at every move, labelled with the position (dataset)</label>
+        </div>
+        <div class="accuracy-card">
+          <p id="accuracy"></p>
+          <button id="btnExportAccuracy" class="ghost">Export accuracy CSV</button>
         </div>
         <ul id="saved" class="saved"></ul>
       </section>
