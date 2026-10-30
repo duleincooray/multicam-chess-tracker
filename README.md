@@ -1,0 +1,125 @@
+# ♞ Chess Cam Tracker
+
+Record over-the-board chess games on an ordinary board using one or two webcams.
+It runs entirely in your browser: no install, no server, and no video leaves your computer.
+
+**Open the app:** once GitHub Pages is switched on (see [Deploying](#deploying)), the app lives at
+`https://<your-username>.github.io/<repo-name>/`.
+
+## What it does
+
+- Uses **one or two webcams** at an angle. No overhead mount needed.
+- You **calibrate** each camera once by clicking the four corners of the board.
+- When the board has been still for a moment, it works out **which squares changed** and
+  picks the **legal move** that best explains the change. Castling, en passant, captures and
+  promotion are handled.
+- Shows the moves on a **live board** and a move list.
+- **Saves games** in the browser and downloads them as **PGN**, ready for Lichess, Chess.com
+  or any chess program.
+- If it's unsure, it asks you to pick between the likely moves, and you can always **type a
+  missed move** or **undo**.
+
+## Quick start
+
+1. Open the app in **Chrome or Edge** (Firefox works too). Camera access needs `https://` or `localhost`.
+2. **Setup → Cameras:** choose Camera A and Camera B (or *None* for one camera) and press **Start cameras**.
+3. Press **Calibrate** on each camera and click the outer corners of the playing area in this order:
+   **a1 → h1 → h8 → a8**. The green grid should sit exactly on the squares.
+4. Set up the pieces, press **Start tracking**, keep hands off the board for a second, then play.
+5. When the game is over, press **Save & new game**. Download PGNs from **Saved games**.
+
+### Placing two cameras
+
+Put one camera behind each player, as high as you can and pointing down at the board.
+The steeper the angle, the fewer squares get hidden behind tall pieces. Each camera covers the
+squares the other one can't see well.
+
+If two cameras won't start at once, they're probably sharing USB bandwidth: pick **640 × 480**
+in Setup or plug them into different USB ports.
+
+### Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| <kbd>Space</kbd> | Pause / resume tracking |
+| <kbd>U</kbd> | Undo the last move (take it back on the board first) |
+| <kbd>B</kbd> | Re-baseline: accept the board as it looks now |
+| <kbd>M</kbd> | Type a move |
+
+### Tuning
+
+| Setting | Raise it if… | Lower it if… |
+| --- | --- | --- |
+| Settle time | moves are read while your hand is still moving | it feels slow |
+| Square sensitivity | it sees changes that didn't happen | it misses moves |
+| Colour threshold | lighting flicker causes false changes | dark pieces on dark squares are missed |
+| Hand / motion threshold | it never says "still" | it reads the board while hands are in view |
+
+Turn on **Show change heatmap** to see what each camera thinks changed.
+
+## Running it locally
+
+Any static file server works; ES modules don't load from `file://`.
+
+```bash
+npm install        # only needed for the tests
+npm start          # serves http://localhost:8080
+# or: python -m http.server 8080
+```
+
+## How it works
+
+```
+webcam frame ──► sample each square ──► compare with last position ──► change score per square
+     (calibrated homography, far side of each square)          │
+                                                               ▼
+          two cameras averaged ──► every legal move scored by how well it explains the change
+                                                               │
+                                                               ▼
+                                   best move played, board + PGN updated
+```
+
+- `js/vision.js` — homography from the four clicked corners, per-square sampling, change and motion scores.
+  For an angled camera it samples the side of each square furthest from the camera, because a piece's own body
+  covers that part while a tall neighbour in front only leans into the near part.
+- `js/tracker.js` — scores every legal move (via [chess.js](https://github.com/jhlywa/chess.js)) against the change
+  scores; reports "ambiguous" or "no fit" rather than guessing.
+- `js/app.js` — cameras, calibration UI, detection loop, game record, saving.
+- `js/storage.js` — safe `localStorage` wrapper (settings, calibrations, games).
+- `vendor/chess.js` — bundled copy of chess.js so the app works offline. Update with `npm run vendor`.
+
+## Tests
+
+```bash
+npm test
+```
+
+Tests cover move inference (castling, en passant, promotion, ambiguity), the geometry, and an end-to-end run
+where two synthetic cameras watch a short game.
+
+## Deploying
+
+The included workflow publishes the site to GitHub Pages on every push to `main`.
+One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+## Limitations
+
+- It tracks changes, it doesn't recognise pieces, so the board must start in the normal starting position
+  (or the position you continue from) and every move has to be legal.
+- Promotions use the piece chosen in *Promote to* (queen by default).
+- Big lighting changes, like a cloud passing, can look like moves. Re-baseline with <kbd>B</kbd> if that happens.
+- Saved games live in this browser's storage. Download PGNs you want to keep.
+
+## Roadmap
+
+See [issues](../../issues). Ideas: automatic board-corner detection, piece recognition to start from any position,
+clock and timestamps, Lichess export, video recording alongside the PGN.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports with a screenshot of the camera view and the heatmap are the
+most useful.
+
+## Licence
+
+MIT. chess.js is BSD-2-Clause (see `vendor/chess.js.LICENSE`).

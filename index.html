@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chess Cam Tracker</title>
+  <meta name="description" content="Record over-the-board chess games from one or two webcams, right in the browser.">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "chess.js": "./vendor/chess.js" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">♞</span>
+      <h1>Chess Cam Tracker</h1>
+    </div>
+    <div id="status" class="status idle" role="status" aria-live="polite">Set up your cameras to begin.</div>
+  </header>
+
+  <main>
+    <!-- ───────────── Setup ───────────── -->
+    <details id="setup" class="card setup" open>
+      <summary>Setup</summary>
+      <div class="setup-grid">
+        <fieldset>
+          <legend>Cameras</legend>
+          <label>Camera A <select id="camA"></select></label>
+          <label>Camera B <select id="camB"></select></label>
+          <label>Resolution
+            <select id="resolution">
+              <option value="1280x720">1280 × 720</option>
+              <option value="640x480">640 × 480 (use if two cameras won't start together)</option>
+            </select>
+          </label>
+          <div class="row">
+            <button id="btnCameras" class="primary">Start cameras</button>
+            <button id="btnRefreshCams" class="ghost" title="Refresh camera list">↻</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Game</legend>
+          <label>White <input id="white" placeholder="White"></label>
+          <label>Black <input id="black" placeholder="Black"></label>
+          <label>Event <input id="event" placeholder="Casual game"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Detection</legend>
+          <label>Settle time <output id="settleOut"></output>
+            <input id="settle" type="range" min="0.4" max="3" step="0.1">
+          </label>
+          <label>Square sensitivity <output id="squareOut"></output>
+            <input id="squareT" type="range" min="0.1" max="0.6" step="0.01">
+          </label>
+          <label>Colour threshold <output id="pixelOut"></output>
+            <input id="pixelT" type="range" min="10" max="80" step="1">
+          </label>
+          <label>Hand / motion threshold <output id="motionOut"></output>
+            <input id="motionT" type="range" min="0.001" max="0.03" step="0.001">
+          </label>
+          <label class="check"><input id="sound" type="checkbox"> Beep when a move is recorded</label>
+          <label class="check"><input id="heatmap" type="checkbox"> Show change heatmap</label>
+          <button id="btnResetSettings" class="ghost small">Reset to defaults</button>
+        </fieldset>
+      </div>
+    </details>
+
+    <div class="layout">
+      <!-- ───────────── Cameras ───────────── -->
+      <section class="cams" id="cams" aria-label="Cameras"></section>
+
+      <!-- ───────────── Board & game ───────────── -->
+      <section class="game card" aria-label="Game">
+        <div class="board-wrap">
+          <div id="board" class="board" aria-label="Current position"></div>
+        </div>
+
+        <div class="controls">
+          <button id="btnTrack" class="primary" disabled>Start tracking</button>
+          <button id="btnUndo" title="Undo last move (U)">Undo</button>
+          <button id="btnBaseline" title="Accept the board as it looks now (B)">Re-baseline</button>
+          <button id="btnFlip" title="Flip board">Flip</button>
+          <label class="promo">Promote to
+            <select id="promotion">
+              <option value="q">Queen</option><option value="r">Rook</option>
+              <option value="b">Bishop</option><option value="n">Knight</option>
+            </select>
+          </label>
+        </div>
+
+        <form id="manualForm" class="manual">
+          <input id="manualMove" placeholder="Type a missed move, e.g. Nf3" autocomplete="off" aria-label="Manual move">
+          <button type="submit">Add</button>
+        </form>
+
+        <div id="choice" class="choice" hidden></div>
+
+        <h2>Moves</h2>
+        <ol id="moves" class="moves"></ol>
+
+        <div class="controls">
+          <button id="btnDownload">Download PGN</button>
+          <button id="btnCopy">Copy PGN</button>
+          <button id="btnSaveGame" class="primary">Save &amp; new game</button>
+        </div>
+
+        <h2>Saved games</h2>
+        <ul id="saved" class="saved"></ul>
+        <p class="hint">Saved games stay in this browser. Download them to keep a copy.</p>
+      </section>
+    </div>
+
+    <p class="footer">
+      Keys: <kbd>Space</kbd> pause/resume · <kbd>U</kbd> undo · <kbd>B</kbd> re-baseline · <kbd>M</kbd> type a move.
+      Everything runs in your browser; no video leaves your computer.
+    </p>
+  </main>
+
+  <template id="camTemplate">
+    <article class="card cam">
+      <div class="cam-head">
+        <h2 class="cam-title"></h2>
+        <span class="cam-state"></span>
+      </div>
+      <div class="cam-view"><canvas class="cam-canvas"></canvas></div>
+      <p class="cam-hint"></p>
+      <div class="row">
+        <button class="btn-calibrate">Calibrate</button>
+        <button class="btn-undo-point ghost" hidden>Undo point</button>
+      </div>
+    </article>
+  </template>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

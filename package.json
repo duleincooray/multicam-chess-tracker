@@ -1,0 +1,24 @@
+{
+  "name": "chess-cam-tracker",
+  "version": "0.1.0",
+  "description": "Record over-the-board chess games from one or two webcams in the browser.",
+  "main": "js/app.js",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "npx --yes serve -l 8080 .",
+    "vendor": "node scripts/vendor.js"
+  },
+  "keywords": [
+    "chess",
+    "computer-vision",
+    "webcam",
+    "pgn"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "chess.js": "^1.4.0"
+  },
+  "type": "module",
+  "private": true
+}
