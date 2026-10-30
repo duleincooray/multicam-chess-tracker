@@ -75,15 +75,23 @@ function stopCameras() {
   setTracking(false);
 }
 
+function saveCamChoice() {
+  if ($('camA').value) store.set('camChoice', { camA: $('camA').value, camB: $('camB').value });
+}
+
 async function startCameras() {
-  try {
-    const info = await listCameras(false);
-    if (info.needsPermission) await listCameras(true);
-  } catch (err) {
-    setStatus(`Camera access was blocked: ${err.message}. Allow it in the address bar and try again.`, 'warn');
-    return;
+  // Keep what the user picked. Only rebuild the lists when we don't have
+  // camera access yet (the dropdowns show a placeholder instead of real cameras).
+  saveCamChoice();
+  if (!$('camA').value) {
+    try {
+      await listCameras(true);
+    } catch (err) {
+      setStatus(`Camera access was blocked: ${err.message}. Allow it in the address bar and try again.`, 'warn');
+      return;
+    }
   }
-  store.set('camChoice', { camA: $('camA').value, camB: $('camB').value });
+  saveCamChoice();
   stopCameras();
 
   const [w, h] = $('resolution').value.split('x').map(Number);
@@ -591,6 +599,7 @@ function init() {
   renderSaved();
 
   $('btnCameras').onclick = startCameras;
+  for (const id of ['camA', 'camB']) $(id).addEventListener('change', saveCamChoice);
   $('btnRefreshCams').onclick = () => listCameras(true).catch((e) => setStatus(e.message, 'warn'));
   $('btnTrack').onclick = () => setTracking(!state.tracking);
   $('btnUndo').onclick = undoMove;

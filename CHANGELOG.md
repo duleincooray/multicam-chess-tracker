@@ -5,6 +5,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Starting cameras no longer replaces the cameras you picked with the previous choice (it kept opening the built-in camera).
+- Setup panels no longer overlap when camera names are long.
+
 ## [0.1.0] - 2026-10-30
 
 ### Added
