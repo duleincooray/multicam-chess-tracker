@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Chess } from 'chess.js';
-import { inferMove, touchedSquares, sqIndex, sqName, buildPgn } from '../js/tracker.js';
+import { inferMove, touchedSquares, sqIndex, sqName, buildPgn, reconsiderLastMove } from '../js/tracker.js';
 
 const scoresFor = (map) => {
   const s = new Float32Array(64);
@@ -102,4 +102,25 @@ test('a subtle move below the normal threshold is still found when it clearly fi
 
 test('faint noise on unrelated squares is not turned into a move', () => {
   assert.equal(inferMove(new Chess(), scoresFor({ d5: 0.2, a6: 0.18 })).status, 'none');
+});
+
+// The game from a real misread: a hand resting near h7/h8 was read as ...Rh7, then the knight went g8-h6.
+const misreadGame = () => {
+  const g = new Chess();
+  for (const m of ['h3', 'h6', 'e3', 'g6', 'd3', 'b6', 'Bd2', 'Ba6', 'e4', 'h5', 'Bh6', 'Bxh6', 'h4', 'g5', 'hxg5', 'Bxg5', 'Nf3']) g.move(m);
+  return g;
+};
+
+test('a misread move is replaced by the move that really happened', () => {
+  const d = reconsiderLastMove(misreadGame(), 'Rh7', scoresFor({ g8: 0.6, h6: 0.55 }));
+  assert.equal(d.action, 'replace');
+  assert.equal(d.move.san, 'Nh6');
+});
+
+test('a phantom move is dropped when the board is back to how it was', () => {
+  assert.equal(reconsiderLastMove(misreadGame(), 'Rh7', new Float32Array(64)).action, 'drop');
+});
+
+test('a correct move is kept', () => {
+  assert.equal(reconsiderLastMove(misreadGame(), 'Rh7', scoresFor({ h8: 0.6, h7: 0.6 })).action, 'keep');
 });

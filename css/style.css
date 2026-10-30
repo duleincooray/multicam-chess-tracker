@@ -194,6 +194,21 @@ button.chip {
 .folder-line { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .folder-line:empty { display: none; }
 
+/* reviewing a saved game */
+.review-bar, .review-title { display: none; }
+body.reviewing .review-bar { display: flex; align-items: center; gap: 8px; animation: rise .3s var(--ease); }
+body.reviewing .dock, body.reviewing .manual, body.reviewing .sheet-actions, body.reviewing .folder-line,
+body.reviewing .cams { display: none; }
+body.reviewing .stage { grid-template-columns: minmax(0, 1fr) auto clamp(240px, 21vw, 320px) minmax(0, 1fr); }
+body.reviewing .center { grid-column: 2; }
+body.reviewing .sheet { grid-column: 3; }
+body.reviewing .review-title { display: block; margin: 0; font: 500 18px var(--book); color: var(--walnut); }
+.rv-label { min-width: 9em; text-align: center; font: 17px var(--book); }
+.moves span.jump { cursor: pointer; border-radius: 4px; padding: 0 4px; margin: 0 -4px; }
+.moves span.jump:hover { background: color-mix(in srgb, var(--brass) 22%, transparent); }
+body.reviewing .moves span.last { background: color-mix(in srgb, var(--brass) 28%, transparent); }
+.saved .acts button.primary { color: var(--walnut-ink); }
+
 /* game over */
 .board-frame { position: relative; }
 .result {

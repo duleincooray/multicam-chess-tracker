@@ -22,6 +22,10 @@
       <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
       <symbol id="i-flip" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M5.5 18.5l2.1-2.1M16.4 7.6l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-first" viewBox="0 0 24 24"><path d="M6 5v14M18 6l-8 6 8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-last" viewBox="0 0 24 24"><path d="M18 5v14M6 6l8 6-8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
@@ -69,10 +73,19 @@
         <button id="btnBaseline" class="icon" title="Accept the board as it looks now (B)" aria-label="Re-baseline"><svg><use href="#i-eye"/></svg></button>
         <button id="btnFlip" class="icon" title="Flip board" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
       </div>
+      <div class="review-bar">
+        <button id="rvFirst" class="icon" aria-label="Start position" title="Start (Home)"><svg><use href="#i-first"/></svg></button>
+        <button id="rvPrev" class="icon" aria-label="Previous move" title="Previous (←)"><svg><use href="#i-prev"/></svg></button>
+        <span id="rvLabel" class="rv-label"></span>
+        <button id="rvNext" class="icon" aria-label="Next move" title="Next (→)"><svg><use href="#i-next"/></svg></button>
+        <button id="rvLast" class="icon" aria-label="Final position" title="End (End)"><svg><use href="#i-last"/></svg></button>
+        <button id="rvExit" class="primary" title="Esc">Back to live game</button>
+      </div>
       <div id="choice" class="choice" hidden></div>
     </section>
 
     <aside class="sheet" aria-label="Score sheet">
+      <p id="reviewTitle" class="review-title"></p>
       <div class="players">
         <input id="white" placeholder="White" aria-label="White player">
         <span class="vs">vs</span>

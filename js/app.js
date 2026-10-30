@@ -3,7 +3,7 @@ import { Chess } from 'chess.js';
 import {
   CORNER_ORDER, buildSampler, sampleFrame, squareScores, motionFraction, combineScores, applyH, squareIndex,
 } from './vision.js';
-import { inferMove, touchedSquares, buildPgn, sqIndex } from './tracker.js';
+import { inferMove, touchedSquares, buildPgn, sqIndex, reconsiderLastMove } from './tracker.js';
 import * as store from './storage.js';
 import * as folder from './folder.js';
 
@@ -25,6 +25,8 @@ const state = {
   analysed: false,
   moving: false,
   pending: null,
+  prevRefs: null,
+  stats: {},
   audio: null,
 };
 
@@ -291,7 +293,9 @@ function analyse(ready) {
   const r = inferMove(state.game, scores, { onT: settings.squareT, promotion: $('promotion').value });
 
   if (r.status === 'move') {
-    playMove(r.move);
+    playMove(r.move, { auto: true });
+  } else if ((r.status === 'nofit' || r.status === 'ambiguous') && tryCorrection(ready)) {
+    // the last detected move was wrong and has been fixed
   } else if (r.status === 'ambiguous') {
     state.pending = r.candidates;
     state.marks = { squares: r.changed, kind: 'warn' };
@@ -307,9 +311,40 @@ function analyse(ready) {
   }
 }
 
+/**
+ * The board no longer matches the record. Compare it with the image taken before the last
+ * detected move: if a different move explains it, swap it in; if nothing really moved, drop it.
+ */
+function tryCorrection(ready) {
+  const prev = state.prevRefs;
+  if (!prev || prev.length !== state.cams.length || prev.some((r) => !r)) return false;
+  const last = state.game.history({ verbose: true }).at(-1);
+  if (!last) return false;
+  const before = new Chess(last.before);
+  const scores = combineScores(ready.map((c) => squareScores(prev[state.cams.indexOf(c)], c.cur, c.sampler.per, settings.pixelT)));
+  const d = reconsiderLastMove(before, last.san, scores, { onT: settings.squareT, promotion: $('promotion').value });
+  if (d.action === 'keep') return false;
+
+  state.game.undo();
+  state.prevRefs = null;
+  hideResult();
+  hideChoice();
+  state.stats.corrected = (state.stats.corrected || 0) + 1;
+  if (d.action === 'replace') {
+    playMove(d.move, { note: `Corrected ${last.san} to ${d.move.san}.` });
+  } else {
+    for (const c of state.cams) if (c.cur) c.ref = c.cur;
+    state.marks = { squares: [], kind: 'ok' };
+    saveCurrent();
+    renderGame();
+    setStatus(`Removed ${last.san}: nothing had really moved. ${turnName()} to move.`, 'busy');
+  }
+  return true;
+}
+
 // ───────────────────────────────────────── game
 
-function playMove(mv) {
+function playMove(mv, opts = {}) {
   let res;
   try {
     res = state.game.move(typeof mv === 'string' ? mv : { from: mv.from, to: mv.to, promotion: mv.promotion });
@@ -317,6 +352,8 @@ function playMove(mv) {
     setStatus(`"${mv}" isn't a legal move here.`, 'warn');
     return false;
   }
+  // Keep the image from before a detected move, so a misread can be corrected later.
+  state.prevRefs = opts.auto ? state.cams.map((c) => c.ref) : null;
   state.marks = { squares: touchedSquares(res), kind: 'ok' };
   state.anim = [[res.from, res.to]];
   if (res.flags.includes('k')) state.anim.push(['h' + res.from[1], 'f' + res.from[1]]);
@@ -329,7 +366,7 @@ function playMove(mv) {
   beep();
 
   const num = Math.ceil(state.game.history().length / 2);
-  let msg = `${num}${res.color === 'w' ? '.' : '…'} ${res.san} recorded. ${turnName()} to move.`;
+  let msg = `${opts.note ? opts.note + ' ' : ''}${num}${res.color === 'w' ? '.' : '…'} ${res.san} recorded. ${turnName()} to move.`;
   if (state.game.isGameOver()) {
     celebrate(res);
     return true;
@@ -439,8 +476,10 @@ function confetti(winner) {
 }
 
 function undoMove() {
+  if (state.review) return;
   const undone = state.game.undo();
   if (!undone) return;
+  state.prevRefs = null;
   hideResult();
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
   state.marks = { squares: [], kind: 'ok' };
@@ -452,6 +491,7 @@ function undoMove() {
 
 function rebaseline() {
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
+  state.prevRefs = null;
   state.marks = { squares: [], kind: 'ok' };
   hideChoice();
   setStatus('Board accepted as it looks now.', 'ok');
@@ -478,20 +518,24 @@ let autosaveChain = Promise.resolve();
 /** Remember the game in the browser and, if a games folder is set, write it there after every move. */
 function saveCurrent() {
   const cur = store.get('current', {});
-  const started = cur.started || new Date().toISOString();
-  const id = cur.id || Date.parse(started) || Date.now();
+  const n = state.game.history().length;
+  const now = new Date().toISOString();
+  // A game's time is when its first move is played, not when the page or New game was opened.
+  const started = n > 0 && !cur.playing ? now : (cur.started || now);
+  const ended = n > 0 ? now : cur.ended;
+  const id = cur.id || Date.now();
   const white = $('white').value, black = $('black').value, event = $('event').value;
   const file = pgnName(white || 'White', black || 'Black', started, event || 'Casual game');
   const downloaded = state.game.isGameOver() ? cur.downloaded : false; // re-download if a finished game changes
-  store.set('current', { ...cur, id, started, pgn: state.game.pgn(), white, black, event, file, downloaded });
+  store.set('current', { ...cur, id, started, ended, playing: n > 0, pgn: state.game.pgn(), white, black, event, file, downloaded });
   upsertCurrentGame();
-  if (state.game.history().length || cur.file) {
+  if (n || cur.playing) {
     autosaveChain = autosaveChain.then(() => autosave(file, cur.file)).catch((err) => console.warn('Autosave failed', err));
   }
 }
 
 /** Keep the game in progress in the Saved games list, so every game is saved without pressing anything. */
-function upsertCurrentGame() {
+function upsertCurrentGame(final = false) {
   const cur = store.get('current', {});
   if (!cur.id) return;
   let games = store.get('games', []).filter((g) => g.id !== cur.id);
@@ -500,9 +544,9 @@ function upsertCurrentGame() {
     const h = headers();
     const pgn = currentPgn();
     games.unshift({
-      id: cur.id, date: cur.started, white: h.White, black: h.Black, event: h.Event,
+      id: cur.id, date: cur.started, ended: cur.ended, white: h.White, black: h.Black, event: h.Event,
       result: pgn.match(/\[Result "([^"]+)"\]/)?.[1] ?? '*', moves: n, pgn, file: cur.file,
-      inProgress: !state.game.isGameOver(),
+      inProgress: !final && !state.game.isGameOver(),
     });
   }
   if (!store.set('games', games)) setStatus('This browser is out of storage space. Choose a games folder to keep saving.', 'warn');
@@ -546,14 +590,16 @@ function restoreCurrent() {
 async function saveAndNewGame() {
   let note = 'New game.';
   if (state.game.history().length) {
-    upsertCurrentGame();
+    upsertCurrentGame(true);
     note = 'Previous game saved.' + (folder.folderName()
       ? ` It's in ${folder.folderName()}/${store.get('current', {}).file}.`
       : await saveFinishedGame());
   }
   state.game = new Chess();
+  state.prevRefs = null;
   const started = new Date().toISOString();
-  store.set('current', { id: Date.now(), started, pgn: '', white: $('white').value, black: $('black').value, event: $('event').value });
+  $('event').value = ''; // a new game gets its own name; players carry over
+  store.set('current', { id: Date.now(), started, pgn: '', white: $('white').value, black: $('black').value, event: '' });
   state.autosavedFile = null;
   hideResult();
   for (const c of state.cams) if (c.cur) c.ref = c.cur;
@@ -643,8 +689,9 @@ function pgnName(white, black, iso, event) {
 function renderBoard() {
   const board = $('board');
   board.innerHTML = '';
-  const rows = state.game.board(); // rows[0] is rank 8
-  const lit = new Set(state.marks.kind === 'ok' ? state.marks.squares : []);
+  const g = viewGame();
+  const rows = g.board(); // rows[0] is rank 8
+  const lit = new Set(state.review ? state.review.marks : state.marks.kind === 'ok' ? state.marks.squares : []);
   for (let vr = 0; vr < 8; vr++) {
     for (let vf = 0; vf < 8; vf++) {
       const rank = state.flipped ? vr : 7 - vr;    // 0 = rank 1
@@ -656,7 +703,7 @@ function renderBoard() {
       sq.className = `sq ${(file + rank) % 2 ? 'light' : 'dark'}${lit.has(name) ? ' hl' : ''}`;
       if (p) {
         let extra = '';
-        if (p.type === 'k' && state.game.isCheckmate()) extra = p.color === state.game.turn() ? ' mated' : ' victor';
+        if (p.type === 'k' && g.isCheckmate()) extra = p.color === g.turn() ? ' mated' : ' victor';
         sq.innerHTML = `<span class="pc ${p.color}${extra}">${GLYPH[p.type]}</span>`;
       }
       if (vr === 7) sq.insertAdjacentHTML('beforeend', `<span class="coord file">${'abcdefgh'[file]}</span>`);
@@ -688,7 +735,9 @@ function animatePieces(board) {
 
 function renderMoves() {
   const list = $('moves');
-  const hist = state.game.history();
+  const rv = state.review;
+  const hist = rv ? rv.moves.map((m) => m.san) : state.game.history();
+  const current = rv ? rv.ply - 1 : hist.length - 1;
   list.innerHTML = '';
   for (let i = 0; i < hist.length; i += 2) {
     const li = document.createElement('li');
@@ -696,12 +745,66 @@ function renderMoves() {
       if (j >= hist.length) break;
       const s = document.createElement('span');
       s.textContent = hist[j];
-      if (j === hist.length - 1) s.className = 'last';
+      if (j === current) s.className = 'last';
+      if (rv) { s.classList.add('jump'); s.onclick = () => reviewGoto(j + 1); }
       li.appendChild(s);
     }
     list.appendChild(li);
   }
-  list.scrollTop = list.scrollHeight;
+  const cur = list.querySelector('.last');
+  if (rv && cur) cur.scrollIntoView({ block: 'nearest' });
+  else list.scrollTop = list.scrollHeight;
+}
+
+// ───────────────────────────────────────── reviewing saved games
+
+const viewGame = () => (state.review ? state.review.view : state.game);
+
+function openReview(g) {
+  const full = new Chess();
+  try { full.loadPgn(g.pgn); } catch { setStatus('That game could not be opened.', 'warn'); return; }
+  const moves = full.history({ verbose: true });
+  setTracking(false);
+  closeDrawer();
+  hideResult();
+  hideChoice();
+  state.review = { meta: g, moves, ply: moves.length, start: moves[0]?.before, marks: [] };
+  document.body.classList.add('reviewing');
+  $('white').value = g.white; $('black').value = g.black;
+  $('white').readOnly = $('black').readOnly = true;
+  $('reviewTitle').textContent = `${savedTitle(g)}, ${g.inProgress ? 'in progress' : g.result === '*' ? 'unfinished' : g.result}`;
+  reviewGoto(moves.length);
+  setStatus('Reviewing a saved game. Use the arrow keys to step through it.', 'idle');
+}
+
+function reviewGoto(ply) {
+  const rv = state.review;
+  if (!rv) return;
+  ply = Math.max(0, Math.min(rv.moves.length, ply));
+  const step = ply - rv.ply;
+  const view = rv.start ? new Chess(rv.start) : new Chess();
+  for (let i = 0; i < ply; i++) view.move(rv.moves[i].san);
+  rv.view = view;
+  rv.ply = ply;
+  const m = rv.moves[ply - 1];
+  rv.marks = m ? [m.from, m.to] : [];
+  if (step === 1 && m) state.anim = [[m.from, m.to]];
+  $('rvLabel').textContent = ply ? `Move ${Math.ceil(ply / 2)}${ply % 2 ? '' : '…'} ${m.san}` : 'Start position';
+  $('rvPrev').disabled = $('rvFirst').disabled = ply === 0;
+  $('rvNext').disabled = $('rvLast').disabled = ply === rv.moves.length;
+  renderBoard();
+  renderMoves();
+}
+
+function exitReview() {
+  if (!state.review) return;
+  state.review = null;
+  document.body.classList.remove('reviewing');
+  const cur = store.get('current', {});
+  $('white').value = cur.white || ''; $('black').value = cur.black || '';
+  $('white').readOnly = $('black').readOnly = false;
+  renderGame();
+  setStatus('Back to the live game.', 'ok');
 }
 
 function renderGame() { renderBoard(); renderMoves(); updateButtons(); }
@@ -726,6 +829,14 @@ function savedTitle(g) {
   return g.event && g.event !== 'Casual game' ? g.event : `${g.white} vs ${g.black}`;
 }
 
+/** "30 Oct, 12:20 to 12:27" from the first and last move times. */
+function playedAt(g) {
+  const s = new Date(g.date), e = g.ended ? new Date(g.ended) : null;
+  const day = s.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const t = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return e && t(e) !== t(s) ? `${day}, ${t(s)} to ${t(e)}` : `${day}, ${t(s)}`;
+}
+
 function renderSaved() {
   renderFolder();
   const ul = $('saved');
@@ -733,11 +844,12 @@ function renderSaved() {
   for (const g of store.get('games', [])) {
     const li = document.createElement('li');
     li.innerHTML = `<div class="info"><div class="title"></div><div class="meta"></div></div>
-      <div class="acts"><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
+      <div class="acts"><button data-act="open" class="primary">Open</button><button data-act="dl">PGN</button><button data-act="ren" class="ghost">Rename</button>
       <button data-act="del" class="ghost">Delete</button></div>`;
-    li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.inProgress ? '(in progress)' : g.result}`;
+    li.querySelector('.title').textContent = `${savedTitle(g)}  ${g.inProgress ? '(in progress)' : g.result === '*' ? '(unfinished)' : g.result}`;
     li.querySelector('.meta').textContent =
-      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} move${Math.ceil(g.moves / 2) === 1 ? '' : 's'}, ${new Date(g.date).toLocaleString()}`;
+      `${g.white} vs ${g.black}, ${Math.ceil(g.moves / 2)} move${Math.ceil(g.moves / 2) === 1 ? '' : 's'}, ${playedAt(g)}`;
+    li.querySelector('[data-act="open"]').onclick = () => openReview(g);
     li.querySelector('[data-act="dl"]').onclick = () => download(g.pgn, g.file || pgnName(g.white, g.black, g.date, g.event));
     li.querySelector('[data-act="ren"]').onclick = () => editSaved(li, g);
     li.querySelector('[data-act="del"]').onclick = () => {
@@ -819,6 +931,7 @@ function updateButtons() {
 }
 
 function setTracking(on) {
+  if (on && state.review) exitReview();
   state.tracking = on && state.cams.length > 0 && state.cams.every((c) => c.sampler);
   state.stillSince = null;
   state.analysed = false;
@@ -982,8 +1095,13 @@ function init() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest('input:not([readonly]), select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
+    if (state.review) {
+      const rv = state.review, keys = { arrowleft: rv.ply - 1, arrowright: rv.ply + 1, home: 0, end: rv.moves.length };
+      if (k in keys) { e.preventDefault(); reviewGoto(keys[k]); return; }
+      if (k === 'escape' && !$('drawer').classList.contains('open')) { exitReview(); return; }
+    }
     if (k === ' ') { e.preventDefault(); if (!$('btnTrack').disabled && !state.game.isGameOver()) setTracking(!state.tracking); }
     else if (k === 'u') undoMove();
     else if (k === 'b') rebaseline();
@@ -992,6 +1110,11 @@ function init() {
     else if (k === 'escape') closeDrawer();
   });
   $('btnSettings').onclick = () => openDrawer();
+  $('rvFirst').onclick = () => reviewGoto(0);
+  $('rvPrev').onclick = () => reviewGoto(state.review.ply - 1);
+  $('rvNext').onclick = () => reviewGoto(state.review.ply + 1);
+  $('rvLast').onclick = () => reviewGoto(state.review.moves.length);
+  $('rvExit').onclick = exitReview;
   $('btnResultSave').onclick = () => { hideResult(); saveAndNewGame(); };
   $('btnResultClose').onclick = hideResult;
   $('btnOpenSetup').onclick = () => openDrawer('cameras');

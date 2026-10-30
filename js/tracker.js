@@ -85,3 +85,22 @@ export function buildPgn(game, headers) {
   game.setHeader('Result', result);
   return game.pgn();
 }
+
+/**
+ * Second opinion on the last detected move, used when the board stops matching the record
+ * (typically because a hand resting near the board was read as a move).
+ *
+ * gameBefore:      chess.js game at the position before the last move
+ * lastSan:         the move that was recorded
+ * scoresSincePrev: change per square between the image taken before that move and now
+ *
+ * Returns { action: 'replace', move }  a different move explains the board better
+ *         { action: 'drop' }           nothing really moved; the recorded move was a phantom
+ *         { action: 'keep' }           no better explanation; leave the record alone
+ */
+export function reconsiderLastMove(gameBefore, lastSan, scoresSincePrev, opts = {}) {
+  const r = inferMove(gameBefore, scoresSincePrev, opts);
+  if (r.status === 'none') return { action: 'drop' };
+  if (r.status === 'move' && r.move.san !== lastSan) return { action: 'replace', move: r.move };
+  return { action: 'keep' };
+}

@@ -11,6 +11,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - A gentler second detection pass catches subtle moves, and the board is re-checked every 1.5 s while it is still, so fewer moves are missed.
 
 ### Added
+- Open saved games to review them: step through the moves with the buttons or arrow keys, or click any move. Esc goes back to the live game.
+- Self-correction: if the board stops matching the record after a detected move (for example a resting hand was read as a move), the app compares the board with how it looked before that move and swaps in the move that really happened, or drops the move if nothing moved.
 - Every game is saved automatically: the game in progress always appears in Saved games (marked in progress) and is updated after each move. When a game ends it is downloaded as PGN if no games folder is set. The Save & new button is now New game.
 - Checkmate celebration: the mated king topples, the winning king rises, confetti bursts from the board and a short fanfare plays (when sound is on). A result card offers Save & new game. Draws and stalemate get a quieter card. Tracking stops when the game ends.
 - Games folder: pick a folder once and the game is auto-saved there as a .pgn file after every move (Chrome/Edge). Renaming updates the file. Without a folder, Save & new game downloads the PGN.
@@ -21,6 +23,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - "Board covered" status when a hand, arm or shadow changes many squares at once, instead of an error.
 
 ### Fixed
+- A new game no longer inherits the previous game's name.
+- Game times are now when the first and last moves were played (shown as a range), not when the page or New game was opened.
 - Starting cameras no longer replaces the cameras you picked with the previous choice (it kept opening the built-in camera).
 - Setup panels no longer overlap when camera names are long.
 
